@@ -12,11 +12,13 @@
 import { createClient } from '@supabase/supabase-js';
 import bcrypt from 'bcryptjs';
 
-const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error(
-    'Faltan SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.\n' +
+    'Faltan SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY (o SUPABASE_SECRET_KEY).\n' +
       'Ejecuta: node --env-file=.env.local scripts/seed.mjs'
   );
   process.exit(1);
