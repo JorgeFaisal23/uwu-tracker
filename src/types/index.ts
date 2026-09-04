@@ -74,6 +74,9 @@ export interface ProgressHistoryEntry {
 export interface WeeklyFcSnapshot {
   weekNumber: number;
   year: number;
+  weekStartDate?: string;
+  weekEndDate?: string;
+  formattedRange?: string;
   recordedAt: string;
   memberSnapshots: ProgressHistoryEntry[];
   averageScore: number;
@@ -93,13 +96,24 @@ export interface MemberAvailability {
   hourSlot: number;  // 0 a 23 (formato 24 horas)
 }
 
+export type SlotRole = 'MT' | 'OT' | 'PH' | 'SH' | 'M1' | 'M2' | 'PR' | 'C';
+
 export interface AssignedPartySlot {
   member: Member;
   job: JobId;
   isMainJob: boolean;
   subrole: SubRole;
-  slotRole: 'MT' | 'OT' | 'PH' | 'SH' | 'M1' | 'M2' | 'PR' | 'C';
+  slotRole: SlotRole;
 }
+
+export interface SlotDiagnostic {
+  dayOfWeek: number;
+  hourSlot: number;
+  availableCount: number;
+  missingSlots: SlotRole[];
+  reason: 'FALTAN_PERSONAS' | 'FALTAN_ROLES' | 'JOBS_REPETIDOS';
+}
+
 
 export interface PartyCombination {
   id: string;

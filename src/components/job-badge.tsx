@@ -16,7 +16,6 @@ import {
   Moon, 
   Skull,
   Music, 
-  Target, 
   Sun, 
   Eye, 
   Feather, 

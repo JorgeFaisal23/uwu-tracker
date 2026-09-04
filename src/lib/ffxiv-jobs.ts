@@ -229,13 +229,25 @@ export const UWU_PHASES = [
   { id: 5, name: 'Fase 5: Primal Roulettes / Enrage', shortName: 'Final', color: '#38bdf8' },
 ];
 
+/**
+ * Normaliza un porcentaje de fase a un entero de 0 a 100.
+ *
+ * `Math.min(100, Math.max(0, NaN))` devuelve NaN, así que sin este filtro un valor no
+ * numérico llegado desde la API contaminaba el score del miembro y el promedio de la FC.
+ */
+export function clampPhasePct(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(Math.min(100, Math.max(0, n)));
+}
+
 export function calculateOverallScore(p1: number, p2: number, p3: number, p4: number, p5: number): number {
   return (
-    Math.min(100, Math.max(0, p1 || 0)) +
-    Math.min(100, Math.max(0, p2 || 0)) +
-    Math.min(100, Math.max(0, p3 || 0)) +
-    Math.min(100, Math.max(0, p4 || 0)) +
-    Math.min(100, Math.max(0, p5 || 0))
+    clampPhasePct(p1) +
+    clampPhasePct(p2) +
+    clampPhasePct(p3) +
+    clampPhasePct(p4) +
+    clampPhasePct(p5)
   );
 }
 
@@ -253,3 +265,37 @@ export function canPlayTankStance(stance: TankStance | null | undefined, require
   if (stance === 'BOTH') return true;
   return stance === requiredStance;
 }
+
+/**
+ * Al modificar el progreso de una fase de UWU (1-5), llena automáticamente al 100%
+ * todas las fases anteriores en la secuencia del combate.
+ */
+export function adjustPhaseProgressOnEdit(
+  currentPcts: [number, number, number, number, number],
+  phaseId: number,
+  newValue: number
+): [number, number, number, number, number] {
+  const result: [number, number, number, number, number] = [
+    clampPhasePct(currentPcts[0]),
+    clampPhasePct(currentPcts[1]),
+    clampPhasePct(currentPcts[2]),
+    clampPhasePct(currentPcts[3]),
+    clampPhasePct(currentPcts[4]),
+  ];
+
+  const targetIndex = phaseId - 1;
+  if (targetIndex < 0 || targetIndex >= 5) {
+    return result;
+  }
+
+  // Las fases anteriores se llenan al 100%
+  for (let i = 0; i < targetIndex; i++) {
+    result[i] = 100;
+  }
+
+  // La fase modificada toma el nuevo valor
+  result[targetIndex] = clampPhasePct(newValue);
+
+  return result;
+}
+

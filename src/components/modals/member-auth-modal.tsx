@@ -58,11 +58,9 @@ export default function MemberAuthModal({ isOpen, onClose, onAuthSuccess }: Memb
         throw new Error(data.error || 'Error en autenticación');
       }
 
-      onAuthSuccess({
-        type: 'MEMBER',
-        memberId: data.member.id,
-        characterName: data.member.characterName,
-      });
+      // La sesión real es la cookie httpOnly que acaba de fijar el servidor; esto solo
+      // le dice a la interfaz a quién está mostrando.
+      onAuthSuccess(data.session);
       onClose();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Error al procesar');

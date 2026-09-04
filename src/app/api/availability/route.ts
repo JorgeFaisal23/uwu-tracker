@@ -1,36 +1,41 @@
 import { NextResponse } from 'next/server';
 import { StorageService } from '@/lib/storage';
+import { availabilitySchema } from '@/lib/schemas';
+import { requireSession } from '@/lib/session';
+import { errorResponse, parseBody } from '@/lib/api';
 
 export async function GET() {
   try {
-    const availabilities = StorageService.getAvailabilities();
+    const availabilities = await StorageService.getAvailabilities();
     return NextResponse.json({ availabilities });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Error al obtener disponibilidad';
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch (err) {
+    return errorResponse(err);
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { memberId, slots } = body;
+    const session = await requireSession();
+    const body = await parseBody(request, availabilitySchema);
 
-    if (!memberId || !Array.isArray(slots)) {
+    // Igual que en progreso: el miembro solo edita su propia disponibilidad.
+    const targetMemberId =
+      session.type === 'ADMIN' ? (body.memberId ?? session.memberId) : session.memberId;
+
+    if (!targetMemberId) {
       return NextResponse.json(
-        { error: 'memberId y arreglo de slots son requeridos.' },
+        { error: 'Indica el miembro cuya disponibilidad se va a actualizar.' },
         { status: 400 }
       );
     }
 
-    StorageService.setMemberAvailability(memberId, slots);
+    await StorageService.setMemberAvailability(targetMemberId, body.slots);
 
     return NextResponse.json({
       success: true,
       message: 'Disponibilidad actualizada correctamente.',
     });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Error al guardar disponibilidad';
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch (err) {
+    return errorResponse(err);
   }
 }

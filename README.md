@@ -44,9 +44,11 @@ Aplicación web con diseño onírico desarrollada para la Free Company **Lux Obs
    - Monitoreo de cuántos miembros alcanzan cada fase a lo largo de las semanas.
    - Botón para el Admin: *"Cerrar semana y guardar foto histórica"*.
 
-7. **Autenticación Ligera con Hashing Criptográfico**:
-   - Autoregistro directo de miembros con contraseña simple hasheada con `bcryptjs`.
-   - Login de administrador con credenciales seguras (usuario: `admin`, contraseña por defecto: `luxobscura2026`).
+7. **Autenticación con Sesiones Firmadas**:
+   - Autoregistro de miembros con contraseña hasheada con `bcryptjs`.
+   - La sesión es un JWT firmado en una cookie `httpOnly`: el navegador no puede leerla ni falsificarla.
+   - Cada ruta de la API comprueba la sesión; un miembro solo puede modificar sus propios datos.
+   - Las credenciales del administrador viven en variables de entorno, nunca en el código.
 
 ---
 
@@ -56,30 +58,82 @@ Aplicación web con diseño onírico desarrollada para la Free Company **Lux Obs
 # 1. Instalar dependencias
 npm install
 
-# 2. Iniciar servidor de desarrollo
+# 2. Crear el archivo de configuración
+cp .env.example .env.local
+
+# 3. Generar el secreto de sesión
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+
+# 4. Generar el hash de la contraseña de administrador
+node scripts/hash-password.mjs "tu-contraseña"
+
+# 5. Pegar ambos valores en .env.local junto con los de Supabase, y arrancar
 npm run dev
 ```
 
-Abre [http://localhost:3000](http://localhost:3000) en tu navegador.
+Abre [http://localhost:3000](http://localhost:3000).
+
+Para cargar el roster de ejemplo de Lux Obscura en una base de datos vacía:
+
+```bash
+node --env-file=.env.local scripts/seed.mjs
+```
+
+### Comprobaciones
+
+```bash
+npm run lint        # ESLint
+npx tsc --noEmit    # Tipos
+npm test            # Tests (solver de party, fechas y catálogo de jobs)
+npm run test:utc    # Los mismos tests con TZ=UTC, como corre Vercel
+```
+
+---
+
+## Zonas Horarias
+
+Toda hora almacenada —disponibilidad y parties— se interpreta en la zona de la Free
+Company (`NEXT_PUBLIC_GUILD_TIMEZONE`, por defecto `America/Mexico_City`). El selector
+del navbar solo cambia **cómo se muestran**, nunca cómo se guardan.
+
+Esto importa porque el servidor de Vercel corre en UTC: si los horarios se calcularan
+con la hora local del proceso, una incursión de las 21:00 aparecería a las 03:00.
 
 ---
 
 ## Despliegue en Vercel + Supabase
 
-### Paso 1: Configurar Base de Datos en Supabase
-1. Ingresa a [supabase.com](https://supabase.com) y crea un nuevo proyecto.
-2. Abre el **SQL Editor** en el panel de Supabase.
-3. Copia y pega el contenido del archivo [`schema.sql`](file:///c:/Users/Xenon/OneDrive/Desktop/UWU%20tracker/schema.sql) y ejecuta el script para crear las tablas e índices.
-4. En la configuración de tu proyecto de Supabase (**Project Settings > API**), copia:
-   - `Project URL`
-   - `anon public key`
-   - `service_role secret key`
+### Paso 1: Base de datos
 
-### Paso 2: Despliegue en Vercel
-1. Sube este repositorio a GitHub.
-2. Importa el proyecto en [vercel.com](https://vercel.com).
-3. Agrega las siguientes variables de entorno:
-   - `NEXT_PUBLIC_SUPABASE_URL` = (Tu Project URL de Supabase)
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` = (Tu anon public key)
-   - `SUPABASE_SERVICE_ROLE_KEY` = (Tu service_role key)
-4. Haz clic en **Deploy**. ¡Tu aplicación estará en línea y lista para la Free Company!
+1. Crea un proyecto en [supabase.com](https://supabase.com).
+2. Abre el **SQL Editor** y ejecuta el contenido de `schema.sql`. Crea las tablas, los
+   índices, la función `replace_member_availability` y activa Row Level Security.
+3. En **Project Settings > API** copia el `Project URL` y la `service_role secret key`.
+
+> La `anon key` no se usa: la aplicación entra siempre desde el servidor con la
+> service-role key. Las tablas tienen RLS activo y ninguna política pública, así que
+> la anon key no puede leer ni escribir nada aunque llegara al navegador.
+
+### Paso 2: Vercel
+
+1. Sube el repositorio a GitHub e impórtalo en [vercel.com](https://vercel.com).
+2. Añade las variables de entorno:
+
+   | Variable | Valor |
+   |---|---|
+   | `SUPABASE_URL` | Project URL de Supabase |
+   | `SUPABASE_SERVICE_ROLE_KEY` | service_role key (**nunca** con prefijo `NEXT_PUBLIC_`) |
+   | `SESSION_SECRET` | 32+ caracteres aleatorios; cambiarlo cierra todas las sesiones |
+   | `ADMIN_USERNAME` | Usuario del panel de administración |
+   | `ADMIN_PASSWORD_HASH` | Salida de `node scripts/hash-password.mjs "<contraseña>"` |
+   | `NEXT_PUBLIC_GUILD_TIMEZONE` | `America/Mexico_City` |
+   | `DISCORD_WEBHOOK_URL` | *(Opcional)* URL del webhook para anunciar incursiones |
+   | `DISCORD_UWU_ROLE_ID` | *(Opcional)* ID del rol @UWU a mencionar en Discord |
+
+3. Despliega.
+
+
+> **Sobre `ADMIN_PASSWORD_HASH`**: un hash bcrypt empieza por `$2b$10$`. En el panel de
+> Vercel puedes pegarlo literal, pero en un archivo `.env` local el cargador interpreta
+> cada `$` como una variable y lo trunca; para eso el script imprime también una
+> variante en base64. La aplicación acepta ambas.

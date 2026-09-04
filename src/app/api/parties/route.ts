@@ -1,94 +1,93 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { StorageService } from '@/lib/storage';
-import { scanAllViableSlots } from '@/lib/party-matcher';
+import { scanAllViableSlots, diagnoseAllNearMissSlots } from '@/lib/party-matcher';
 import { getNextDateForDayOfWeek } from '@/lib/date-utils';
+import { schedulePartySchema } from '@/lib/schemas';
+import { requireAdmin } from '@/lib/session';
+import { errorResponse, parseBody } from '@/lib/api';
+import { DAYS_OF_WEEK, formatHourOnly } from '@/lib/timezones';
+import { notifyPartyScheduled, notifyPartyCancelled } from '@/lib/discord';
 
 export async function GET() {
   try {
-    const members = StorageService.getMembers();
-    const progressMap = StorageService.getProgressMap();
-    const availabilities = StorageService.getAvailabilities();
+    const [members, progressMap, availabilities, scheduledParties, pastParties, attendanceCounts] =
+      await Promise.all([
+        StorageService.getMembers(),
+        StorageService.getProgressMap(),
+        StorageService.getAvailabilities(),
+        StorageService.getScheduledParties(false),
+        StorageService.getPastParties(),
+        StorageService.getAttendanceCounts(),
+      ]);
 
-    // Calcular todas las combinaciones viables en todos los horarios
-    const viableSlotsMap = scanAllViableSlots(availabilities, members, progressMap);
-    // Obtener las parties oficiales ya aceptadas (solo vigentes, no expiradas)
-    const scheduledParties = StorageService.getScheduledParties(false);
-    // Obtener el histórico de parties concluidas/pasadas
-    const pastParties = StorageService.getPastParties();
+    const viableSlotsMap = scanAllViableSlots(
+      availabilities,
+      members,
+      progressMap,
+      attendanceCounts
+    );
+    const nearMissSlots = diagnoseAllNearMissSlots(availabilities, members, progressMap);
 
-    return NextResponse.json({
-      viableSlotsMap,
-      scheduledParties,
-      pastParties,
-    });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Error al calcular parties';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ viableSlotsMap, scheduledParties, pastParties, nearMissSlots });
+  } catch (err) {
+    return errorResponse(err);
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { 
-      scheduledDate, 
-      dayOfWeek, 
-      hourSlot, 
-      durationHours, 
-      startTimeLabel, 
-      notes, 
-      members 
-    } = body;
+    await requireAdmin();
 
-    if (dayOfWeek === undefined || hourSlot === undefined || !members || !Array.isArray(members)) {
-      return NextResponse.json({ error: 'Datos de la party incompletos.' }, { status: 400 });
-    }
+    const body = await parseBody(request, schedulePartySchema);
 
-    const dOfWeek = Number(dayOfWeek);
-    const hSlot = Number(hourSlot);
-    const targetDate = scheduledDate || getNextDateForDayOfWeek(dOfWeek, hSlot);
-
-    // Inicializar a los miembros con estado PENDING para confirmación
-    const membersFormatted = members.map((m: any) => ({
-      memberId: m.memberId,
-      characterName: m.characterName,
-      assignedJob: m.assignedJob,
-      assignedRole: m.assignedRole,
-      isMainJob: Boolean(m.isMainJob),
-      confirmationStatus: m.confirmationStatus || 'PENDING',
-    }));
-
-    const scheduled = StorageService.scheduleParty({
-      scheduledDate: targetDate,
-      dayOfWeek: dOfWeek,
-      hourSlot: hSlot,
-      durationHours: Number(durationHours || 1),
-      startTimeLabel: startTimeLabel || `Día ${dOfWeek} a las ${hSlot}:00`,
+    const scheduled = await StorageService.scheduleParty({
+      scheduledDate:
+        body.scheduledDate || getNextDateForDayOfWeek(body.dayOfWeek, body.hourSlot),
+      dayOfWeek: body.dayOfWeek,
+      hourSlot: body.hourSlot,
+      durationHours: body.durationHours,
+      startTimeLabel: body.startTimeLabel || defaultTimeLabel(body.dayOfWeek, body.hourSlot),
       status: 'ACCEPTED',
-      notes: notes || 'Incursión Oficial de Lux Obscura',
-      members: membersFormatted,
+      notes: body.notes || 'Incursión Oficial de Lux Obscura',
+      members: body.members.map(m => ({ ...m, confirmationStatus: 'PENDING' as const })),
+    });
+
+    after(async () => {
+      await notifyPartyScheduled(scheduled);
     });
 
     return NextResponse.json({ success: true, party: scheduled });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Error al oficializar party';
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch (err) {
+    return errorResponse(err);
   }
 }
 
 export async function DELETE(request: Request) {
   try {
-    const { searchParams } = new URL(request.url);
-    const id = searchParams.get('id');
+    await requireAdmin();
 
+    const id = new URL(request.url).searchParams.get('id');
     if (!id) {
       return NextResponse.json({ error: 'ID de party requerido.' }, { status: 400 });
     }
 
-    StorageService.cancelScheduledParty(id);
+    const party = await StorageService.getPartyById(id);
+
+    await StorageService.cancelScheduledParty(id);
+
+    if (party) {
+      after(async () => {
+        await notifyPartyCancelled(party);
+      });
+    }
+
     return NextResponse.json({ success: true, message: 'Party cancelada.' });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Error al cancelar party';
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch (err) {
+    return errorResponse(err);
   }
+}
+
+function defaultTimeLabel(dayOfWeek: number, hourSlot: number): string {
+  const day = DAYS_OF_WEEK.find(d => d.id === dayOfWeek);
+  return `${day?.name ?? `Día ${dayOfWeek}`} ${formatHourOnly(hourSlot)}`;
 }

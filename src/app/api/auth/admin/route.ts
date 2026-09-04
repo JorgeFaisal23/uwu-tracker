@@ -1,42 +1,30 @@
 import { NextResponse } from 'next/server';
-import { DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_HASH, verifyPassword } from '@/lib/auth';
+import { getAdminUsername, verifyAdminCredentials } from '@/lib/auth';
+import { adminLoginSchema } from '@/lib/schemas';
+import { createSession } from '@/lib/session';
+import { errorResponse, parseBody } from '@/lib/api';
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { username, password } = body;
+    const { username, password } = await parseBody(request, adminLoginSchema);
 
-    if (!username || !password) {
-      return NextResponse.json(
-        { error: 'Usuario y contraseña requeridos.' },
-        { status: 400 }
-      );
-    }
-
-    if (username.trim().toLowerCase() !== DEFAULT_ADMIN_USERNAME.toLowerCase()) {
+    // Un único mensaje para usuario y contraseña incorrectos: distinguirlos revelaría
+    // qué nombre de usuario es el bueno.
+    if (!(await verifyAdminCredentials(username, password))) {
       return NextResponse.json(
         { error: 'Credenciales de administrador inválidas.' },
         { status: 401 }
       );
     }
 
-    const isValid = await verifyPassword(password, DEFAULT_ADMIN_HASH);
-    if (!isValid) {
-      return NextResponse.json(
-        { error: 'Contraseña de administrador incorrecta.' },
-        { status: 401 }
-      );
-    }
+    await createSession({ type: 'ADMIN', characterName: 'Administrador' });
 
     return NextResponse.json({
       success: true,
-      user: {
-        username: DEFAULT_ADMIN_USERNAME,
-        role: 'ADMIN',
-      },
+      session: { type: 'ADMIN', characterName: 'Administrador' },
+      user: { username: getAdminUsername(), role: 'ADMIN' },
     });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Error en autenticación de admin';
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch (err) {
+    return errorResponse(err);
   }
 }

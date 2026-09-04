@@ -82,7 +82,7 @@ export default function Navbar({
               }`}
             >
               <Compass className="w-4 h-4" />
-              Nexo FC
+              FC
             </button>
 
             <button
@@ -229,7 +229,7 @@ export default function Navbar({
               activeTab === 'dashboard' ? 'bg-cyan-500/20 text-cyan-300 font-bold' : 'text-slate-400'
             }`}
           >
-            Nexo FC
+            FC
           </button>
           <button
             onClick={() => onTabChange('parties')}

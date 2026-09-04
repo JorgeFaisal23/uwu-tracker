@@ -21,7 +21,7 @@ export default function AdminModal({
   onAdminLoginSuccess,
   onRefreshData,
 }: AdminModalProps) {
-  const [username, setUsername] = useState('admin');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -52,6 +52,8 @@ export default function AdminModal({
 
       onAdminLoginSuccess();
       setPassword('');
+      setUsername('');
+      onClose();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Error en autenticación');
     } finally {
@@ -150,7 +152,8 @@ export default function AdminModal({
                   required
                   value={username}
                   onChange={e => setUsername(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-white focus:outline-none focus:border-amber-400"
+                  placeholder="Usuario administrador"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
                 />
               </div>
             </div>
@@ -165,12 +168,9 @@ export default function AdminModal({
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="Contraseña de administrador"
-                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-white focus:outline-none focus:border-amber-400"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
                 />
               </div>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Clave por defecto: <code className="text-amber-300 font-mono">luxobscura2026</code>
-              </p>
             </div>
 
             <button

@@ -1,79 +1,83 @@
 import { NextResponse } from 'next/server';
 import { StorageService } from '@/lib/storage';
 import { verifyPassword } from '@/lib/auth';
+import { memberAuthSchema } from '@/lib/schemas';
+import { createSession } from '@/lib/session';
+import { errorResponse, parseBody } from '@/lib/api';
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { action, characterName, password, mainJob, flexJobs, tankStance } = body;
+    const body = await parseBody(request, memberAuthSchema);
 
-    if (!characterName || !password) {
+    if (body.action === 'register') {
+      const newMember = await StorageService.registerMember({
+        characterName: body.characterName,
+        passwordPlain: body.password,
+        mainJob: body.mainJob,
+        flexJobs: body.flexJobs,
+        tankStance: body.tankStance,
+      });
+
+      await createSession({
+        type: 'MEMBER',
+        memberId: newMember.id,
+        characterName: newMember.characterName,
+      });
+
+      return NextResponse.json({
+        success: true,
+        session: {
+          type: 'MEMBER',
+          memberId: newMember.id,
+          characterName: newMember.characterName,
+        },
+        member: publicMember(newMember),
+      });
+    }
+
+    const member = await StorageService.getMemberByName(body.characterName);
+
+    // Mismo mensaje si el personaje no existe o si la contraseña no coincide: así no
+    // se puede usar el login para averiguar qué personajes están registrados.
+    if (!member || !(await verifyPassword(body.password, member.passwordHash))) {
       return NextResponse.json(
-        { error: 'El nombre de personaje y la contraseña son requeridos.' },
-        { status: 400 }
+        { error: 'Nombre de personaje o contraseña incorrectos.' },
+        { status: 401 }
       );
     }
 
-    if (action === 'register') {
-      if (!mainJob) {
-        return NextResponse.json(
-          { error: 'Debes seleccionar un Main Job.' },
-          { status: 400 }
-        );
-      }
+    await createSession({
+      type: 'MEMBER',
+      memberId: member.id,
+      characterName: member.characterName,
+    });
 
-      const newMember = await StorageService.registerMember({
-        characterName,
-        passwordPlain: password,
-        mainJob,
-        flexJobs,
-        tankStance,
-      });
-
-      return NextResponse.json({
-        success: true,
-        member: {
-          id: newMember.id,
-          characterName: newMember.characterName,
-          mainJob: newMember.mainJob,
-          flexJobs: newMember.flexJobs,
-          tankStance: newMember.tankStance,
-        },
-      });
-    }
-
-    if (action === 'login') {
-      const member = StorageService.getMemberByName(characterName);
-      if (!member) {
-        return NextResponse.json(
-          { error: 'Miembro no encontrado. Por favor regístrate primero.' },
-          { status: 404 }
-        );
-      }
-
-      const isValid = await verifyPassword(password, member.passwordHash);
-      if (!isValid) {
-        return NextResponse.json(
-          { error: 'Contraseña incorrecta.' },
-          { status: 401 }
-        );
-      }
-
-      return NextResponse.json({
-        success: true,
-        member: {
-          id: member.id,
-          characterName: member.characterName,
-          mainJob: member.mainJob,
-          flexJobs: member.flexJobs,
-          tankStance: member.tankStance,
-        },
-      });
-    }
-
-    return NextResponse.json({ error: 'Acción no válida.' }, { status: 400 });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Error en autenticación';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({
+      success: true,
+      session: {
+        type: 'MEMBER',
+        memberId: member.id,
+        characterName: member.characterName,
+      },
+      member: publicMember(member),
+    });
+  } catch (err) {
+    return errorResponse(err);
   }
+}
+
+function publicMember(member: {
+  id: string;
+  characterName: string;
+  mainJob: string;
+  flexJobs: string[];
+  tankStance: string | null;
+}) {
+  return {
+    id: member.id,
+    characterName: member.characterName,
+    mainJob: member.mainJob,
+    flexJobs: member.flexJobs,
+    tankStance: member.tankStance,
+  };
 }

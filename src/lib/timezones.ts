@@ -1,3 +1,5 @@
+import { GUILD_TIMEZONE, shiftSlotToZone } from './guild-time';
+
 export interface TimezoneOption {
   id: string;
   name: string;
@@ -34,3 +36,83 @@ export function formatHourSlot(hour: number): string {
 export function formatHourOnly(hour: number): string {
   return `${hour.toString().padStart(2, '0')}:00`;
 }
+
+/**
+ * Etiqueta de una hora de la FC ya convertida a la zona que el miembro eligió ver.
+ * Devuelve además el desplazamiento de día, para poder avisar de que la franja cae
+ * en la víspera o al día siguiente en esa zona.
+ */
+export function formatHourInZone(
+  dayOfWeek: number,
+  hourSlot: number,
+  timezone: string
+): { label: string; dayOfWeek: number; dayShift: number } {
+  const shifted = shiftSlotToZone(dayOfWeek, hourSlot, timezone);
+
+  return {
+    label: formatHourOnly(shifted.hourSlot),
+    dayOfWeek: shifted.dayOfWeek,
+    dayShift: shifted.dayShift,
+  };
+}
+
+/**
+ * Texto corto que sitúa una franja en la zona elegida, p. ej. 'Sáb 05:00'.
+ * Si la zona elegida es la de la FC, no añade ruido y devuelve solo la hora.
+ */
+export function describeSlotInZone(
+  dayOfWeek: number,
+  hourSlot: number,
+  timezone: string
+): string {
+  if (timezone === GUILD_TIMEZONE) return formatHourOnly(hourSlot);
+
+  const shifted = formatHourInZone(dayOfWeek, hourSlot, timezone);
+  const day = DAYS_OF_WEEK.find(d => d.id === shifted.dayOfWeek);
+
+  return `${day?.short ?? ''} ${shifted.label}`.trim();
+}
+
+/** Horas habituales de incursiones / raid prime time (17:00 a 23:00) */
+export const RAID_HOURS = [17, 18, 19, 20, 21, 22, 23];
+
+/** 24 horas del día ordenadas iniciando a las 17:00 */
+export const FULL_HOURS_START_17 = Array.from({ length: 24 }, (_, i) => (17 + i) % 24);
+
+/**
+ * Calcula las casillas comprendidas entre dos coordenadas de la cuadrícula
+ * basándose en su POSICIÓN espacial (columna y fila), no en orden cronológico lineal.
+ */
+export function computeGridPositionRange(
+  cellA: { day: number; hour: number },
+  cellB: { day: number; hour: number },
+  displayedHours: number[] = RAID_HOURS,
+  daysList: { id: number }[] = DAYS_OF_WEEK
+): { day: number; hour: number }[] {
+  const colA = daysList.findIndex(d => d.id === cellA.day);
+  const colB = daysList.findIndex(d => d.id === cellB.day);
+  const rowA = displayedHours.indexOf(cellA.hour);
+  const rowB = displayedHours.indexOf(cellB.hour);
+
+  if (colA === -1 || colB === -1 || rowA === -1 || rowB === -1) {
+    return [];
+  }
+
+  const minCol = Math.min(colA, colB);
+  const maxCol = Math.max(colA, colB);
+  const minRow = Math.min(rowA, rowB);
+  const maxRow = Math.max(rowA, rowB);
+
+  const result: { day: number; hour: number }[] = [];
+  for (let r = minRow; r <= maxRow; r++) {
+    const hour = displayedHours[r];
+    for (let c = minCol; c <= maxCol; c++) {
+      result.push({ day: daysList[c].id, hour });
+    }
+  }
+
+  return result;
+}
+
+export { GUILD_TIMEZONE };
+

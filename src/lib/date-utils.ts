@@ -1,101 +1,84 @@
-import { ScheduledParty } from '@/types';
+import {
+  GUILD_TIMEZONE,
+  addDaysToDateStr,
+  diffInDays,
+  instantToZonedDateStr,
+  instantToZonedDayOfWeek,
+  nextDateForDayOfWeek,
+  zonedToInstant,
+} from './guild-time';
+
+export {
+  GUILD_TIMEZONE,
+  getCalendarWeek,
+  getCalendarWeekRange,
+  formatCalendarWeekRange,
+  getFfxivWeek,
+} from './guild-time';
+export type { CalendarWeekInfo } from './guild-time';
 
 /**
- * Retorna la fecha actual en formato 'YYYY-MM-DD' según la zona horaria indicada.
+ * Fecha de hoy en formato 'YYYY-MM-DD' según la zona indicada (por defecto, la de la FC).
  */
-export function getTodayDateString(timezone: string = 'America/Mexico_City'): string {
-  try {
-    const formatter = new Intl.DateTimeFormat('en-CA', {
-      timeZone: timezone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    });
-    return formatter.format(new Date()); // Formato YYYY-MM-DD
-  } catch {
-    const d = new Date();
-    const year = d.getFullYear();
-    const month = (d.getMonth() + 1).toString().padStart(2, '0');
-    const day = d.getDate().toString().padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
+export function getTodayDateString(timezone: string = GUILD_TIMEZONE): string {
+  return instantToZonedDateStr(new Date(), timezone);
 }
 
 /**
- * Calcula la fecha calendario más próxima (YYYY-MM-DD) para un día de la semana específico (0 = Domingo, 1 = Lunes, ..., 6 = Sábado).
- * Si el día coincide con hoy pero la hora ya pasó o se desea la siguiente ocurrencia, busca el siguiente.
+ * Próxima fecha de calendario (YYYY-MM-DD) para un día de la semana
+ * (0 = Domingo … 6 = Sábado), resuelta en la zona horaria de la FC.
  */
 export function getNextDateForDayOfWeek(
   targetDayOfWeek: number,
   hourSlot?: number,
-  baseDate: Date = new Date()
+  baseInstant: Date = new Date()
 ): string {
-  const currentDayOfWeek = baseDate.getDay(); // 0 = Domingo, 1 = Lunes, ...
-  let diffDays = targetDayOfWeek - currentDayOfWeek;
-
-  if (diffDays < 0) {
-    diffDays += 7;
-  } else if (diffDays === 0 && hourSlot !== undefined) {
-    // Si es hoy, verificar si la hora ya pasó
-    if (baseDate.getHours() >= hourSlot) {
-      diffDays = 7; // Próxima semana
-    }
-  }
-
-  const result = new Date(baseDate);
-  result.setDate(result.getDate() + diffDays);
-
-  const year = result.getFullYear();
-  const month = (result.getMonth() + 1).toString().padStart(2, '0');
-  const day = result.getDate().toString().padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return nextDateForDayOfWeek(targetDayOfWeek, hourSlot, baseInstant);
 }
 
 /**
- * Formatea una fecha YYYY-MM-DD en texto amigable en español.
- * Ej: '2026-09-04' -> 'Viernes, 4 de Septiembre de 2026'
+ * Formatea 'YYYY-MM-DD' en texto en español.
+ * Ej: '2026-09-04' -> 'viernes, 4 de septiembre de 2026'
  */
 export function formatDateToSpanish(dateStr: string, short = false): string {
   if (!dateStr) return '';
   const [year, month, day] = dateStr.split('-').map(Number);
-  const date = new Date(year, month - 1, day, 12, 0, 0);
+  if (!year || !month || !day) return dateStr;
 
+  // Mediodía UTC: lo bastante lejos de ambas medianoches para que ninguna zona
+  // desplace la fecha mostrada.
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
   if (isNaN(date.getTime())) return dateStr;
 
-  if (short) {
-    return new Intl.DateTimeFormat('es-MX', {
-      weekday: 'short',
-      day: 'numeric',
-      month: 'short',
-    }).format(date);
-  }
-
-  return new Intl.DateTimeFormat('es-MX', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  }).format(date);
+  return new Intl.DateTimeFormat(
+    'es-MX',
+    short
+      ? { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }
+      : { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }
+  ).format(date);
 }
 
 /**
- * Retorna el objeto Date exacto de inicio de una party a partir de su scheduledDate y hourSlot.
+ * Instante exacto de inicio de una party (su hora se interpreta en la zona de la FC).
  */
 export function getPartyStartDateTime(dateStr: string, hourSlot: number): Date {
-  const [year, month, day] = dateStr.split('-').map(Number);
-  return new Date(year, month - 1, day, hourSlot, 0, 0, 0);
+  return zonedToInstant(dateStr, hourSlot);
 }
 
 /**
- * Retorna el objeto Date exacto de finalización de una party.
+ * Instante exacto de finalización de una party.
  */
-export function getPartyEndDateTime(dateStr: string, hourSlot: number, durationHours: number = 1): Date {
+export function getPartyEndDateTime(
+  dateStr: string,
+  hourSlot: number,
+  durationHours: number = 1
+): Date {
   const start = getPartyStartDateTime(dateStr, hourSlot);
-  return new Date(start.getTime() + durationHours * 60 * 60 * 1000);
+  return new Date(start.getTime() + durationHours * 3600_000);
 }
 
 /**
- * Calcula la fecha y hora límite de confirmación (5 horas antes del inicio de la party).
+ * Instante límite para confirmar asistencia (por defecto, 5 h antes del inicio).
  */
 export function getConfirmationDeadline(
   dateStr: string,
@@ -103,11 +86,11 @@ export function getConfirmationDeadline(
   deadlineHoursBefore: number = 5
 ): Date {
   const start = getPartyStartDateTime(dateStr, hourSlot);
-  return new Date(start.getTime() - deadlineHoursBefore * 60 * 60 * 1000);
+  return new Date(start.getTime() - deadlineHoursBefore * 3600_000);
 }
 
 /**
- * Determina si la ventana de confirmación sigue abierta (al menos 5 horas antes de la party).
+ * ¿Sigue abierta la ventana de confirmación?
  */
 export function isConfirmationWindowOpen(
   dateStr: string,
@@ -115,18 +98,18 @@ export function isConfirmationWindowOpen(
   deadlineHoursBefore: number = 5,
   now: Date = new Date()
 ): boolean {
-  const deadline = getConfirmationDeadline(dateStr, hourSlot, deadlineHoursBefore);
-  return now.getTime() < deadline.getTime();
+  return now.getTime() < getConfirmationDeadline(dateStr, hourSlot, deadlineHoursBefore).getTime();
 }
 
 /**
- * Retorna información detallada del tiempo restante hasta el límite de confirmación (5h antes).
+ * Detalle del tiempo restante hasta el límite de confirmación.
  */
 export function getRemainingConfirmationInfo(
   dateStr: string,
   hourSlot: number,
   deadlineHoursBefore: number = 5,
-  now: Date = new Date()
+  now: Date = new Date(),
+  displayTimezone: string = GUILD_TIMEZONE
 ): {
   isOpen: boolean;
   hoursRemaining: number;
@@ -135,32 +118,31 @@ export function getRemainingConfirmationInfo(
 } {
   const deadline = getConfirmationDeadline(dateStr, hourSlot, deadlineHoursBefore);
   const diffMs = deadline.getTime() - now.getTime();
-  const isOpen = diffMs > 0;
 
-  const totalMinutes = Math.max(0, Math.floor(diffMs / (60 * 1000)));
-  const hoursRemaining = Math.floor(totalMinutes / 60);
-  const minutesRemaining = totalMinutes % 60;
-
-  const deadlineLabel = new Intl.DateTimeFormat('es-MX', {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(deadline);
+  const totalMinutes = Math.max(0, Math.floor(diffMs / 60_000));
 
   return {
-    isOpen,
-    hoursRemaining,
-    minutesRemaining,
-    deadlineLabel,
+    isOpen: diffMs > 0,
+    hoursRemaining: Math.floor(totalMinutes / 60),
+    minutesRemaining: totalMinutes % 60,
+    deadlineLabel: new Intl.DateTimeFormat('es-MX', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: displayTimezone,
+    }).format(deadline),
   };
 }
 
 /**
- * Determina si una party ha expirado (su día ha pasado, o concluyó su horario de incursión).
- * Si ha pasado el día o la hora de finalización, se considera expirada.
+ * ¿Ya pasó una party?
+ *
+ * Se compara un único instante absoluto contra otro. La versión anterior mezclaba la
+ * fecha de hoy en CDMX con un Date construido en la hora local del proceso, de modo
+ * que servidor y navegador podían discrepar sobre si una party seguía vigente.
  */
 export function isPartyExpired(
   party: {
@@ -176,46 +158,28 @@ export function isPartyExpired(
     return true;
   }
 
-  // Si no tiene fecha definida, no podemos determinar fecha exacta (caso legacy)
-  if (!party.scheduledDate) {
-    return false;
-  }
+  // Sin fecha no hay forma de situarla en el tiempo (caso heredado).
+  if (!party.scheduledDate) return false;
 
-  const todayStr = getTodayDateString();
+  const end = getPartyEndDateTime(
+    party.scheduledDate,
+    party.hourSlot,
+    party.durationHours || 1
+  );
 
-  // Si la fecha agendada es menor que hoy (el día ya pasó)
-  if (party.scheduledDate < todayStr) {
-    return true;
-  }
-
-  // Si es hoy, verificar si ya concluyó la duración de la incursión
-  if (party.scheduledDate === todayStr) {
-    const endDateTime = getPartyEndDateTime(
-      party.scheduledDate,
-      party.hourSlot,
-      party.durationHours || 1
-    );
-    return now.getTime() >= endDateTime.getTime();
-  }
-
-  return false;
+  return now.getTime() >= end.getTime();
 }
 
 /**
- * Retorna etiqueta de tiempo relativo (ej. "¡Hoy!", "Mañana", "En 3 días", "Pasada").
+ * Etiqueta relativa ('¡Hoy!', 'Mañana', 'En 3 días', …).
  */
-export function getRelativeDateLabel(dateStr: string, todayStr: string = getTodayDateString()): string {
-  if (dateStr === todayStr) {
-    return '¡Hoy!';
-  }
+export function getRelativeDateLabel(
+  dateStr: string,
+  todayStr: string = getTodayDateString()
+): string {
+  if (dateStr === todayStr) return '¡Hoy!';
 
-  const [tY, tM, tD] = todayStr.split('-').map(Number);
-  const [pY, pM, pD] = dateStr.split('-').map(Number);
-
-  const todayDate = new Date(tY, tM - 1, tD);
-  const partyDate = new Date(pY, pM - 1, pD);
-
-  const diffDays = Math.round((partyDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+  const diffDays = diffInDays(todayStr, dateStr);
 
   if (diffDays === 1) return 'Mañana';
   if (diffDays > 1) return `En ${diffDays} días`;
@@ -226,40 +190,31 @@ export function getRelativeDateLabel(dateStr: string, todayStr: string = getToda
 }
 
 /**
- * Retorna un mapa de los 7 días de la semana actual con sus fechas correspondientes (YYYY-MM-DD y etiqueta corta).
+ * Los 7 días de la semana en curso con su fecha, resueltos en la zona de la FC.
  */
-export function getCurrentWeekDates(baseDate: Date = new Date()): {
+export function getCurrentWeekDates(baseInstant: Date = new Date()): {
   dayOfWeek: number;
   dateStr: string;
   shortLabel: string;
   isToday: boolean;
 }[] {
-  const currentDay = baseDate.getDay(); // 0 = Domingo
-  const todayStr = getTodayDateString();
-  const weekDays = [];
+  const todayStr = instantToZonedDateStr(baseInstant);
+  // El domingo (día 0) que abre la semana en curso.
+  const sundayStr = addDaysToDateStr(todayStr, -instantToZonedDayOfWeek(baseInstant));
 
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(baseDate);
-    const diff = i - currentDay;
-    d.setDate(d.getDate() + diff);
+  return Array.from({ length: 7 }, (_, i) => {
+    const dateStr = addDaysToDateStr(sundayStr, i);
+    const [y, m, d] = dateStr.split('-').map(Number);
 
-    const year = d.getFullYear();
-    const month = (d.getMonth() + 1).toString().padStart(2, '0');
-    const day = d.getDate().toString().padStart(2, '0');
-    const dateStr = `${year}-${month}-${day}`;
-
-    const shortLabel = new Intl.DateTimeFormat('es-MX', {
-      day: 'numeric',
-      month: 'short',
-    }).format(d);
-
-    weekDays.push({
+    return {
       dayOfWeek: i,
       dateStr,
-      shortLabel,
-      isToday: dateStr === todayStr,
-    });
-  }
-
-  return weekDays;
+      shortLabel: new Intl.DateTimeFormat('es-MX', {
+        day: 'numeric',
+        month: 'short',
+        timeZone: 'UTC',
+      }).format(new Date(Date.UTC(y, m - 1, d, 12))),
+      isToday: dateStr === getTodayDateString(),
+    };
+  });
 }

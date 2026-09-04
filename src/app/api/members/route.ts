@@ -1,25 +1,29 @@
 import { NextResponse } from 'next/server';
 import { StorageService } from '@/lib/storage';
+import { errorResponse } from '@/lib/api';
 
 export async function GET() {
   try {
-    const members = StorageService.getMembers().map(m => ({
+    const [allMembers, progressMap, attendanceCounts] = await Promise.all([
+      StorageService.getMembers(),
+      StorageService.getProgressMap(),
+      StorageService.getAttendanceCounts(),
+    ]);
+
+    // El hash de contraseña nunca sale del servidor.
+    const members = allMembers.map(m => ({
       id: m.id,
       characterName: m.characterName,
       mainJob: m.mainJob,
       flexJobs: m.flexJobs,
       tankStance: m.tankStance,
+      isActive: m.isActive,
       createdAt: m.createdAt,
     }));
 
-    const progressMap = StorageService.getProgressMap();
-
-    return NextResponse.json({
-      members,
-      progressMap,
-    });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Error al obtener miembros';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ members, progressMap, attendanceCounts });
+  } catch (err) {
+    return errorResponse(err);
   }
 }
+

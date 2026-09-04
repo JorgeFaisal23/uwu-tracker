@@ -1,31 +1,32 @@
 import { NextResponse } from 'next/server';
 import { StorageService } from '@/lib/storage';
-import { ConfirmationStatus } from '@/types';
+import { confirmAttendanceSchema } from '@/lib/schemas';
+import { requireSession } from '@/lib/session';
+import { errorResponse, parseBody } from '@/lib/api';
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { partyId, memberId, status, isAdminOverride } = body;
+    const session = await requireSession();
+    const body = await parseBody(request, confirmAttendanceSchema);
 
-    if (!partyId || !memberId || !status) {
+    const isAdmin = session.type === 'ADMIN';
+
+    // El override de la ventana de 5 h se deriva del tipo de sesión. Antes llegaba como
+    // `isAdminOverride` en el cuerpo, así que cualquier miembro podía saltarse el plazo.
+    const targetMemberId = isAdmin ? (body.memberId ?? session.memberId) : session.memberId;
+
+    if (!targetMemberId) {
       return NextResponse.json(
-        { error: 'Parámetros incompletos (partyId, memberId y status requeridos).' },
+        { error: 'Indica el miembro cuya asistencia se va a registrar.' },
         { status: 400 }
       );
     }
 
-    if (!['CONFIRMED', 'DECLINED', 'PENDING'].includes(status)) {
-      return NextResponse.json(
-        { error: 'Estado de confirmación no válido.' },
-        { status: 400 }
-      );
-    }
-
-    const result = StorageService.confirmPartyAttendance(
-      partyId,
-      memberId,
-      status as ConfirmationStatus,
-      Boolean(isAdminOverride)
+    const result = await StorageService.confirmPartyAttendance(
+      body.partyId,
+      targetMemberId,
+      body.status,
+      isAdmin
     );
 
     if (!result.success) {
@@ -38,10 +39,12 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       party: result.party,
-      message: status === 'CONFIRMED' ? '¡Asistencia confirmada con éxito!' : 'Asistencia declinada.',
+      message:
+        body.status === 'CONFIRMED'
+          ? '¡Asistencia confirmada con éxito!'
+          : 'Asistencia actualizada.',
     });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Error al registrar confirmación';
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch (err) {
+    return errorResponse(err);
   }
 }

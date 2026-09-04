@@ -19,7 +19,8 @@ import {
   X,
   AlertTriangle,
   History,
-  Users
+  Copy,
+  Download
 } from 'lucide-react';
 import { 
   getNextDateForDayOfWeek, 
@@ -29,9 +30,89 @@ import {
   isPartyExpired, 
   getRemainingConfirmationInfo 
 } from '@/lib/date-utils';
+import { formatPartyForDiscord } from '@/lib/format-party';
+import { SlotDiagnostic, SlotRole } from '@/types';
+
+const ROLE_NAMES: Record<SlotRole, string> = {
+  MT: 'Main Tank',
+  OT: 'Off Tank',
+  PH: 'Pure Healer',
+  SH: 'Shield Healer',
+  M1: 'Melee DPS (M1)',
+  M2: 'Melee DPS (M2)',
+  PR: 'Phys Ranged',
+  C: 'Caster',
+};
+
+function formatMissingSlots(slots: SlotRole[]): string {
+  return slots.map(s => ROLE_NAMES[s] ?? s).join(', ');
+}
+
+function NearMissSlotCard({ diag }: { diag: SlotDiagnostic }) {
+  const dayName = DAYS_OF_WEEK.find(d => d.id === diag.dayOfWeek)?.name || `Día ${diag.dayOfWeek}`;
+  const hourLabel = formatHourSlot(diag.hourSlot);
+
+  let badgeColor = 'bg-amber-500/20 text-amber-300 border-amber-500/40';
+  let reasonTitle = '';
+  let reasonDescription = '';
+
+  if (diag.reason === 'FALTAN_PERSONAS') {
+    const missingCount = 8 - diag.availableCount;
+    badgeColor = 'bg-blue-500/20 text-blue-300 border-blue-500/40';
+    reasonTitle = `Falta${missingCount > 1 ? 'n' : ''} ${missingCount} persona${missingCount > 1 ? 's' : ''}`;
+    reasonDescription = diag.missingSlots.length > 0
+      ? `Hay ${diag.availableCount} disponibles. Puestos sin cubrir: ${formatMissingSlots(diag.missingSlots)}.`
+      : `Hay ${diag.availableCount} disponibles en esta franja.`;
+  } else if (diag.reason === 'FALTAN_ROLES') {
+    badgeColor = 'bg-amber-500/20 text-amber-300 border-amber-500/40';
+    reasonTitle = 'Faltan roles específicos';
+    reasonDescription = `Hay ${diag.availableCount} disponibles, pero nadie puede cubrir: ${formatMissingSlots(diag.missingSlots)}.`;
+  } else if (diag.reason === 'JOBS_REPETIDOS') {
+    badgeColor = 'bg-purple-500/20 text-purple-300 border-purple-500/40';
+    reasonTitle = 'Conflicto de jobs repetidos';
+    reasonDescription = 'Los roles están cubiertos, pero se repite un job entre los miembros disponibles.';
+  }
+
+  return (
+    <div className="p-4 rounded-2xl bg-slate-900/70 border border-white/10 hover:border-white/20 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+      <div className="flex items-start gap-3">
+        <div className="p-2 rounded-xl bg-slate-800/90 text-cyan-300 border border-white/5 mt-0.5">
+          <Clock className="w-4 h-4" />
+        </div>
+        <div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-bold text-white">
+              {dayName} {hourLabel}
+            </span>
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${badgeColor}`}>
+              {reasonTitle}
+            </span>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-white/5 font-medium">
+              {diag.availableCount} / 8 disponibles
+            </span>
+          </div>
+          <p className="text-xs text-slate-300/90 mt-1">
+            {reasonDescription}
+          </p>
+        </div>
+      </div>
+      {diag.missingSlots.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+          <span className="text-[11px] text-slate-400 font-medium">Falta:</span>
+          {diag.missingSlots.map(s => (
+            <span key={s} className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-950/60 text-rose-300 border border-rose-500/30">
+              {s}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface PartyFinderViewProps {
   viableSlotsMap: Record<string, PartyCombination[]>;
+  nearMissSlots?: SlotDiagnostic[];
   scheduledParties: ScheduledParty[];
   pastParties?: ScheduledParty[];
   session: UserSession;
@@ -52,11 +133,12 @@ interface PartyFinderViewProps {
     }[];
   }) => Promise<void>;
   onCancelParty: (id: string) => Promise<void>;
-  onConfirmAttendance?: (partyId: string, memberId: string, status: ConfirmationStatus, isAdminOverride?: boolean) => Promise<void>;
+  onConfirmAttendance?: (partyId: string, memberId: string, status: ConfirmationStatus) => Promise<void>;
 }
 
 export default function PartyFinderView({
   viableSlotsMap,
+  nearMissSlots = [],
   scheduledParties,
   pastParties = [],
   session,
@@ -72,6 +154,25 @@ export default function PartyFinderView({
   const [partyDuration, setPartyDuration] = useState(2);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPastParties, setShowPastParties] = useState(false);
+  const [copyStatusMap, setCopyStatusMap] = useState<Record<string, boolean>>({});
+  const [clipboardFallbackText, setClipboardFallbackText] = useState<string | null>(null);
+
+  const handleCopyDiscord = async (party: ScheduledParty) => {
+    const text = formatPartyForDiscord(party);
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        setCopyStatusMap(prev => ({ ...prev, [party.id]: true }));
+        setTimeout(() => {
+          setCopyStatusMap(prev => ({ ...prev, [party.id]: false }));
+        }, 2500);
+        return;
+      }
+    } catch (err) {
+      console.warn('Error al copiar al portapapeles:', err);
+    }
+    setClipboardFallbackText(text);
+  };
 
   // Filtrar horarios viables según día seleccionado
   const viableEntries = Object.entries(viableSlotsMap).filter(([key]) => {
@@ -79,6 +180,13 @@ export default function PartyFinderView({
     const [day] = key.split('_');
     return Number(day) === selectedDay;
   });
+
+  // Filtrar near-misses según día seleccionado
+  const filteredNearMissSlots = (nearMissSlots || []).filter(diag => {
+    if (selectedDay === 'ALL') return true;
+    return diag.dayOfWeek === selectedDay;
+  });
+
 
   // Parties vigentes activas (cuyo día y horario no han pasado)
   const activeParties = scheduledParties.filter(p => !isPartyExpired(p) && p.status === 'ACCEPTED');
@@ -104,7 +212,6 @@ export default function PartyFinderView({
     if (!schedulingParty || !selectedPartyDate) return;
     setIsSubmitting(true);
     try {
-      const dayName = DAYS_OF_WEEK.find(d => d.id === schedulingParty.dayOfWeek)?.name || 'Día';
       const formattedDateText = formatDateToSpanish(selectedPartyDate, true);
       const startTimeLabel = `${formattedDateText} ${schedulingParty.hourSlot.toString().padStart(2, '0')}:00`;
 
@@ -282,15 +389,46 @@ export default function PartyFinderView({
                       )}
                     </div>
 
-                    {session.type === 'ADMIN' && (
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <button
-                        onClick={() => onCancelParty(sp.id)}
-                        className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-950/40 transition-all border border-transparent hover:border-red-500/30"
-                        title="Cancelar Party"
+                        type="button"
+                        onClick={() => handleCopyDiscord(sp)}
+                        className="p-2 rounded-xl text-slate-400 hover:text-indigo-300 hover:bg-indigo-950/40 transition-all border border-transparent hover:border-indigo-500/30 flex items-center gap-1 text-xs"
+                        title="Copiar composición en formato Discord"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        {copyStatusMap[sp.id] ? (
+                          <>
+                            <Check className="w-4 h-4 text-emerald-400" />
+                            <span className="text-emerald-300 text-[11px] font-bold">¡Copiado!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4 text-indigo-400" />
+                            <span className="hidden sm:inline text-[11px] text-slate-300">Discord</span>
+                          </>
+                        )}
                       </button>
-                    )}
+
+                      <a
+                        href={`/api/parties/${sp.id}/calendar.ics`}
+                        download={`incursion-uwu-${sp.scheduledDate}.ics`}
+                        className="p-2 rounded-xl text-slate-400 hover:text-cyan-300 hover:bg-cyan-950/40 transition-all border border-transparent hover:border-cyan-500/30 flex items-center gap-1 text-xs"
+                        title="Descargar evento de calendario iCalendar (.ics)"
+                      >
+                        <Download className="w-4 h-4 text-cyan-400" />
+                        <span className="hidden sm:inline text-[11px] text-slate-300">.ics</span>
+                      </a>
+
+                      {session.type === 'ADMIN' && (
+                        <button
+                          onClick={() => onCancelParty(sp.id)}
+                          className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-950/40 transition-all border border-transparent hover:border-red-500/30"
+                          title="Cancelar Party"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Grilla de los 8 integrantes con tamaño verificado y brillo verde completo */}
@@ -369,7 +507,7 @@ export default function PartyFinderView({
                               <div className="flex items-center gap-1">
                                 {!isConfirmed && (
                                   <button
-                                    onClick={() => onConfirmAttendance(sp.id, m.memberId, 'CONFIRMED', true)}
+                                    onClick={() => onConfirmAttendance(sp.id, m.memberId, 'CONFIRMED')}
                                     className="px-2 py-0.5 rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 transition-all"
                                     title="Confirmar por Admin"
                                   >
@@ -378,7 +516,7 @@ export default function PartyFinderView({
                                 )}
                                 {!isDeclined && (
                                   <button
-                                    onClick={() => onConfirmAttendance(sp.id, m.memberId, 'DECLINED', true)}
+                                    onClick={() => onConfirmAttendance(sp.id, m.memberId, 'DECLINED')}
                                     className="px-2 py-0.5 rounded-md bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/40 flex items-center gap-1 transition-all"
                                     title="Declinar por Admin"
                                   >
@@ -491,14 +629,36 @@ export default function PartyFinderView({
         </div>
 
         {viableEntries.length === 0 ? (
-          <div className="glass-card rounded-2xl p-8 text-center border border-white/5">
-            <AlertCircle className="w-8 h-8 text-indigo-400 mx-auto mb-2 opacity-70" />
-            <h3 className="text-base font-semibold text-slate-300">
-              No hay horarios con 8 roles completos para el filtro seleccionado
-            </h3>
-            <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-              Se requiere que coincidan 8 miembros que cubran exactamente: 1 MT, 1 OT, 1 Pure Healer, 1 Shield Healer, 2 Melees distintos, 1 Phys Ranged y 1 Caster, sin repetir jobs.
-            </p>
+          <div className="space-y-6">
+            <div className="glass-card rounded-2xl p-8 text-center border border-white/5">
+              <AlertCircle className="w-8 h-8 text-indigo-400 mx-auto mb-2 opacity-70" />
+              <h3 className="text-base font-semibold text-slate-300">
+                No hay horarios con 8 roles completos para el filtro seleccionado
+              </h3>
+              <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                Se requiere que coincidan 8 miembros que cubran exactamente: 1 MT, 1 OT, 1 Pure Healer, 1 Shield Healer, 2 Melees distintos, 1 Phys Ranged y 1 Caster, sin repetir jobs.
+              </p>
+            </div>
+
+            {/* Diagnóstico de roles / Franjas cercanas al quórum */}
+            {filteredNearMissSlots.length > 0 && (
+              <div className="glass-card rounded-3xl p-6 border border-cyan-500/20 shadow-xl space-y-4">
+                <div className="flex items-center gap-2 pb-2 border-b border-white/5">
+                  <Sparkles className="w-4 h-4 text-cyan-400" />
+                  <h4 className="text-sm font-bold text-white uppercase tracking-wider">
+                    Franjas más cercanas al quórum (Diagnóstico de roles)
+                  </h4>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Horarios con 6 o más miembros disponibles donde pequeños ajustes en disponibilidad o flex jobs podrían desbloquear una incursión:
+                </p>
+                <div className="space-y-2.5">
+                  {filteredNearMissSlots.map(diag => (
+                    <NearMissSlotCard key={`${diag.dayOfWeek}_${diag.hourSlot}`} diag={diag} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-6">
@@ -659,6 +819,29 @@ export default function PartyFinderView({
                 </div>
               );
             })}
+
+            {/* Si además hay franjas cercanas al quórum, mostrarlas para informar de otras opciones potenciales */}
+            {filteredNearMissSlots.length > 0 && (
+              <div className="glass-card rounded-3xl p-6 border border-white/10 shadow-lg space-y-4 mt-8">
+                <div className="flex items-center justify-between pb-2 border-b border-white/5">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-cyan-400" />
+                    <h4 className="text-sm font-bold text-white tracking-wide">
+                      Otras franjas próximas al quórum ({filteredNearMissSlots.length})
+                    </h4>
+                  </div>
+                  <span className="text-[11px] text-slate-400 font-medium">6+ disponibles sin party completa</span>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Franjas con alta afluencia que podrían convertirse en raid con pequeños ajustes de disponibilidad o roles:
+                </p>
+                <div className="space-y-2.5">
+                  {filteredNearMissSlots.map(diag => (
+                    <NearMissSlotCard key={`${diag.dayOfWeek}_${diag.hourSlot}`} diag={diag} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -771,6 +954,46 @@ export default function PartyFinderView({
                 className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white text-xs font-bold shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
               >
                 {isSubmitting ? 'Guardando...' : 'Confirmar y Agendar Incursión'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de fallback para copiar manualmente si el portapapeles del navegador no tiene permisos */}
+      {clipboardFallbackText && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div className="glass-card rounded-3xl p-6 border border-cyan-500/40 max-w-lg w-full shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="text-base font-bold text-white flex items-center gap-2">
+                <Copy className="w-4 h-4 text-cyan-400" />
+                Copiar alineación para Discord
+              </h4>
+              <button
+                type="button"
+                onClick={() => setClipboardFallbackText(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-300">
+              Tu navegador requiere que selecciones y copies el texto manualmente:
+            </p>
+            <textarea
+              readOnly
+              rows={8}
+              value={clipboardFallbackText}
+              onFocus={e => e.target.select()}
+              className="w-full font-mono text-xs p-3 rounded-xl bg-slate-900 border border-white/10 text-slate-200 focus:outline-none focus:border-cyan-400"
+            />
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setClipboardFallbackText(null)}
+                className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs"
+              >
+                Cerrar
               </button>
             </div>
           </div>

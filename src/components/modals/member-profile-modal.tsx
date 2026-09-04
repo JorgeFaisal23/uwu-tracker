@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { JobId, Member, TankStance, UwuProgress } from '@/types';
-import { FFXIV_JOBS, SUBROLE_LABELS, UWU_PHASES } from '@/lib/ffxiv-jobs';
+import { adjustPhaseProgressOnEdit, FFXIV_JOBS, SUBROLE_LABELS, UWU_PHASES } from '@/lib/ffxiv-jobs';
 import { X, Sparkles, Sliders, Check } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -14,8 +14,18 @@ interface MemberProfileModalProps {
   onUpdateSuccess: () => Promise<void>;
 }
 
-export default function MemberProfileModal({
-  isOpen,
+export default function MemberProfileModal(props: MemberProfileModalProps) {
+  if (!props.isOpen) return null;
+
+  return (
+    <MemberProfileModalContent
+      {...props}
+      key={`${props.member.id}_${props.progress.updatedAt || ''}`}
+    />
+  );
+}
+
+function MemberProfileModalContent({
   onClose,
   member,
   progress,
@@ -32,6 +42,7 @@ export default function MemberProfileModal({
   const [mainJob, setMainJob] = useState<JobId>(member.mainJob);
   const [flexJobs, setFlexJobs] = useState<JobId[]>(member.flexJobs || []);
   const [tankStance, setTankStance] = useState<TankStance>(member.tankStance || 'BOTH');
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
 
   const [activeTab, setActiveTab] = useState<'progress' | 'jobs' | 'security'>('progress');
@@ -39,7 +50,19 @@ export default function MemberProfileModal({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  if (!isOpen) return null;
+  // Al modificar una fase, las anteriores se llenan al 100%
+  const handlePhaseChange = (phaseId: number, value: number) => {
+    const [newP1, newP2, newP3, newP4, newP5] = adjustPhaseProgressOnEdit(
+      [p1, p2, p3, p4, p5],
+      phaseId,
+      value
+    );
+    setP1(newP1);
+    setP2(newP2);
+    setP3(newP3);
+    setP4(newP4);
+    setP5(newP5);
+  };
 
   const isTankSelected = 
     FFXIV_JOBS[mainJob]?.subrole === 'TANK' ||
@@ -60,7 +83,6 @@ export default function MemberProfileModal({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          memberId: member.id,
           p1GarudaPct: p1,
           p2IfritPct: p2,
           p3TitanPct: p3,
@@ -69,7 +91,10 @@ export default function MemberProfileModal({
         }),
       });
 
-      if (!res.ok) throw new Error('Error al actualizar progreso');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Error al actualizar progreso');
+      }
 
       // Celebración si completó o avanzó significativamente
       if (p5 >= 100 || (p4 >= 100 && progress.p4UltimaPct < 100)) {
@@ -102,14 +127,20 @@ export default function MemberProfileModal({
           mainJob,
           flexJobs,
           tankStance: isTankSelected ? tankStance : null,
+          // Cambiar la contraseña exige demostrar que se conoce la actual.
+          currentPassword: newPassword ? currentPassword : undefined,
           newPassword: newPassword || undefined,
         }),
       });
 
-      if (!res.ok) throw new Error('Error al actualizar perfil');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Error al actualizar perfil');
+      }
 
       setSuccessMsg('¡Perfil actualizado con éxito!');
       await onUpdateSuccess();
+      setCurrentPassword('');
       setNewPassword('');
       setTimeout(() => setSuccessMsg(null), 2500);
     } catch (err: unknown) {
@@ -205,12 +236,6 @@ export default function MemberProfileModal({
                   phase.id === 3 ? p3 :
                   phase.id === 4 ? p4 : p5;
 
-                const setVal = 
-                  phase.id === 1 ? setP1 :
-                  phase.id === 2 ? setP2 :
-                  phase.id === 3 ? setP3 :
-                  phase.id === 4 ? setP4 : setP5;
-
                 return (
                   <div key={phase.id} className="p-3 rounded-2xl bg-slate-900/60 border border-white/5 text-xs">
                     <div className="flex items-center justify-between mb-1.5">
@@ -223,7 +248,7 @@ export default function MemberProfileModal({
                       max="100"
                       step="1"
                       value={val}
-                      onChange={e => setVal(Number(e.target.value))}
+                      onChange={e => handlePhaseChange(phase.id, Number(e.target.value))}
                       className="w-full accent-cyan-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
                     />
                     <div className="flex justify-between text-[10px] text-slate-500 mt-1">
@@ -336,6 +361,17 @@ export default function MemberProfileModal({
         {activeTab === 'security' && (
           <div className="space-y-4 text-xs">
             <div>
+              <label className="block text-slate-300 font-semibold mb-1">Contraseña Actual</label>
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={e => setCurrentPassword(e.target.value)}
+                placeholder="Confirma tu contraseña actual"
+                className="w-full px-3 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-white focus:outline-none focus:border-cyan-400"
+              />
+            </div>
+
+            <div>
               <label className="block text-slate-300 font-semibold mb-1">Nueva Contraseña</label>
               <input
                 type="password"
@@ -345,13 +381,13 @@ export default function MemberProfileModal({
                 className="w-full px-3 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-white focus:outline-none focus:border-cyan-400"
               />
               <p className="text-[11px] text-slate-400 mt-1">
-                La contraseña se almacena con hash criptográfico bcrypt.
+                Mínimo 6 caracteres. Se almacena con hash bcrypt, nunca en claro.
               </p>
             </div>
 
             <button
               type="button"
-              disabled={loading || !newPassword}
+              disabled={loading || !newPassword || !currentPassword}
               onClick={handleSaveProfile}
               className="w-full py-2.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-bold tracking-wide shadow-[0_0_20px_rgba(168,85,247,0.3)] transition-all hover:scale-[1.02] active:scale-95 disabled:opacity-50 text-xs"
             >

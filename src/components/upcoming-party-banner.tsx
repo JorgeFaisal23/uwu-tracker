@@ -9,33 +9,35 @@ import {
   Sparkles, 
   CheckCircle2, 
   AlertTriangle, 
-  XCircle, 
   Check, 
   X, 
   ShieldAlert,
-  Users
+  Users,
+  Copy,
+  Download
 } from 'lucide-react';
 import { 
   formatDateToSpanish, 
   getRelativeDateLabel, 
-  getRemainingConfirmationInfo,
-  isConfirmationWindowOpen 
+  getRemainingConfirmationInfo
 } from '@/lib/date-utils';
+import { formatPartyForDiscord } from '@/lib/format-party';
 
 interface UpcomingPartyBannerProps {
   party: ScheduledParty;
   currentMemberId?: string;
-  isAdmin?: boolean;
   onConfirmAttendance?: (partyId: string, memberId: string, status: ConfirmationStatus) => Promise<void>;
 }
 
 export default function UpcomingPartyBanner({ 
   party, 
   currentMemberId, 
-  isAdmin,
   onConfirmAttendance 
 }: UpcomingPartyBannerProps) {
   const [submittingStatus, setSubmittingStatus] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'fallback'>('idle');
+  const [clipboardFallbackText, setClipboardFallbackText] = useState('');
+
 
   const isCurrentMemberIncluded = party.members.some(m => m.memberId === currentMemberId);
   const mySlot = party.members.find(m => m.memberId === currentMemberId);
@@ -49,6 +51,22 @@ export default function UpcomingPartyBanner({
   const remainingInfo = getRemainingConfirmationInfo(party.scheduledDate, party.hourSlot, 5);
   const isWindowOpen = remainingInfo.isOpen;
 
+  const handleCopyDiscord = async () => {
+    const text = formatPartyForDiscord(party);
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        setCopyStatus('copied');
+        setTimeout(() => setCopyStatus('idle'), 2500);
+        return;
+      }
+    } catch (err) {
+      console.warn('Error copiando al portapapeles:', err);
+    }
+    setClipboardFallbackText(text);
+    setCopyStatus('fallback');
+  };
+
   const handleAction = async (status: ConfirmationStatus) => {
     if (!currentMemberId || !onConfirmAttendance) return;
     try {
@@ -60,7 +78,7 @@ export default function UpcomingPartyBanner({
   };
 
   return (
-    <div className="relative overflow-hidden rounded-3xl glass-card-glow p-6 sm:p-8 border border-cyan-500/30 shadow-[0_0_50px_rgba(56,189,248,0.15)] my-6">
+    <div className="relative overflow-hidden rounded-3xl glass-card-glow p-6 sm:p-8 border border-cyan-500/30 shadow-[0_0_50px_rgba(56,189,248,0.15)]">
       {/* Resplandor decorativo de éter */}
       <div className="absolute -right-20 -top-20 w-64 h-64 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute -left-20 -bottom-20 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -75,7 +93,7 @@ export default function UpcomingPartyBanner({
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs uppercase tracking-widest text-cyan-400 font-bold">
-                  Próxima Incursión Oficial de la FC
+                  {isCurrentMemberIncluded ? 'Tu Próxima Incursión Oficial' : 'Próxima Incursión Oficial de la FC'}
                 </span>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-semibold flex items-center gap-1 border border-emerald-500/30">
                   <CheckCircle2 className="w-3 h-3" /> Aceptada por Admin
@@ -83,7 +101,7 @@ export default function UpcomingPartyBanner({
                 {relativeDate && (
                   <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${
                     relativeDate === '¡Hoy!' 
-                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse' 
                       : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
                   }`}>
                     {relativeDate}
@@ -96,7 +114,7 @@ export default function UpcomingPartyBanner({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 text-sm">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900/80 border border-white/10 text-slate-200 shadow-sm">
               <Calendar className="w-4 h-4 text-cyan-400" />
               <span className="font-semibold text-white">
@@ -107,6 +125,35 @@ export default function UpcomingPartyBanner({
               <Clock className="w-4 h-4 text-indigo-400" />
               <span>{party.hourSlot.toString().padStart(2, '0')}:00 ({party.durationHours}h)</span>
             </div>
+
+            <button
+              type="button"
+              onClick={handleCopyDiscord}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-950/70 hover:bg-indigo-900/90 text-indigo-200 hover:text-white border border-indigo-400/40 text-xs font-semibold transition-all shadow-sm active:scale-95"
+              title="Copiar composición en formato Discord"
+            >
+              {copyStatus === 'copied' ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-300">¡Copiado!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Copiar Discord</span>
+                </>
+              )}
+            </button>
+
+            <a
+              href={`/api/parties/${party.id}/calendar.ics`}
+              download={`incursion-uwu-${party.scheduledDate}.ics`}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-950/70 hover:bg-cyan-900/90 text-cyan-200 hover:text-white border border-cyan-400/40 text-xs font-semibold transition-all shadow-sm active:scale-95"
+              title="Descargar evento de calendario iCalendar (.ics)"
+            >
+              <Download className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Calendario (.ics)</span>
+            </a>
           </div>
         </div>
 
@@ -329,6 +376,46 @@ export default function UpcomingPartyBanner({
             })}
           </div>
         </div>
+
+        {/* Modal de fallback para copiar manualmente si el portapapeles del navegador no tiene permisos */}
+        {copyStatus === 'fallback' && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+            <div className="glass-card rounded-3xl p-6 border border-cyan-500/40 max-w-lg w-full shadow-2xl space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-base font-bold text-white flex items-center gap-2">
+                  <Copy className="w-4 h-4 text-cyan-400" />
+                  Copiar alineación para Discord
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setCopyStatus('idle')}
+                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-xs text-slate-300">
+                Tu navegador requiere que selecciones y copies el texto manualmente:
+              </p>
+              <textarea
+                readOnly
+                rows={8}
+                value={clipboardFallbackText}
+                onFocus={e => e.target.select()}
+                className="w-full font-mono text-xs p-3 rounded-xl bg-slate-900 border border-white/10 text-slate-200 focus:outline-none focus:border-cyan-400"
+              />
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setCopyStatus('idle')}
+                  className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

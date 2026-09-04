@@ -9,9 +9,10 @@ import {
   ScheduledParty, 
   WeeklyFcSnapshot, 
   UserSession,
-  ConfirmationStatus 
+  ConfirmationStatus,
+  SlotDiagnostic
 } from '@/types';
-import { isPartyExpired } from '@/lib/date-utils';
+import { getPartyStartDateTime, isPartyExpired } from '@/lib/date-utils';
 import AstralCanvas from '@/components/astral-canvas';
 import Navbar from '@/components/navbar';
 import UpcomingPartyBanner from '@/components/upcoming-party-banner';
@@ -23,16 +24,94 @@ import HistoricalView from '@/components/historical-view';
 import MemberAuthModal from '@/components/modals/member-auth-modal';
 import MemberProfileModal from '@/components/modals/member-profile-modal';
 import AdminModal from '@/components/modals/admin-modal';
-import { 
-  Sparkles, 
-  Users, 
-  Search, 
-  Filter, 
-  Award, 
-  TrendingUp, 
-  ShieldCheck, 
-  ArrowUpDown 
-} from 'lucide-react';
+import { Users, Search, ArrowUpDown } from 'lucide-react';
+
+interface AppData {
+  members: Member[];
+  progressMap: Record<string, UwuProgress>;
+  availabilities: MemberAvailability[];
+  viableSlotsMap: Record<string, PartyCombination[]>;
+  nearMissSlots: SlotDiagnostic[];
+  scheduledParties: ScheduledParty[];
+  pastParties: ScheduledParty[];
+  snapshots: WeeklyFcSnapshot[];
+  attendanceCounts: Record<string, number>;
+}
+
+const EMPTY_APP_DATA: AppData = {
+  members: [],
+  progressMap: {},
+  availabilities: [],
+  viableSlotsMap: {},
+  nearMissSlots: [],
+  scheduledParties: [],
+  pastParties: [],
+  snapshots: [],
+  attendanceCounts: {},
+};
+
+async function readJson<T>(res: Response, fallback: T): Promise<T> {
+  if (!res.ok) return fallback;
+  try {
+    return (await res.json()) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Trae de una vez todo lo que pinta la aplicación. No toca estado de React. */
+async function fetchAppData(): Promise<AppData> {
+  try {
+    const [membersRes, partiesRes, availRes, historyRes] = await Promise.all([
+      fetch('/api/members'),
+      fetch('/api/parties'),
+      fetch('/api/availability'),
+      fetch('/api/history'),
+    ]);
+
+    const [membersData, partiesData, availData, historyData] = await Promise.all([
+      readJson(membersRes, {} as {
+        members?: Member[];
+        progressMap?: Record<string, UwuProgress>;
+        attendanceCounts?: Record<string, number>;
+      }),
+      readJson(partiesRes, {} as {
+        viableSlotsMap?: Record<string, PartyCombination[]>;
+        nearMissSlots?: SlotDiagnostic[];
+        scheduledParties?: ScheduledParty[];
+        pastParties?: ScheduledParty[];
+      }),
+      readJson(availRes, {} as { availabilities?: MemberAvailability[] }),
+      readJson(historyRes, {} as { snapshots?: WeeklyFcSnapshot[] }),
+    ]);
+
+    return {
+      members: membersData.members ?? [],
+      progressMap: membersData.progressMap ?? {},
+      viableSlotsMap: partiesData.viableSlotsMap ?? {},
+      nearMissSlots: partiesData.nearMissSlots ?? [],
+      scheduledParties: partiesData.scheduledParties ?? [],
+      pastParties: partiesData.pastParties ?? [],
+      availabilities: availData.availabilities ?? [],
+      snapshots: historyData.snapshots ?? [],
+      attendanceCounts: membersData.attendanceCounts ?? {},
+    };
+  } catch (err) {
+    console.error('Error cargando datos:', err);
+    return EMPTY_APP_DATA;
+  }
+}
+
+async function fetchSession(): Promise<UserSession> {
+  try {
+    const res = await fetch('/api/auth/session');
+    const data = await readJson(res, {} as { session?: UserSession });
+    return data.session ?? { type: 'GUEST' };
+  } catch (err) {
+    console.error('Error cargando sesión:', err);
+    return { type: 'GUEST' };
+  }
+}
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'parties' | 'availability' | 'history'>('dashboard');
@@ -44,10 +123,11 @@ export default function Home() {
   const [progressMap, setProgressMap] = useState<Record<string, UwuProgress>>({});
   const [availabilities, setAvailabilities] = useState<MemberAvailability[]>([]);
   const [viableSlotsMap, setViableSlotsMap] = useState<Record<string, PartyCombination[]>>({});
+  const [nearMissSlots, setNearMissSlots] = useState<SlotDiagnostic[]>([]);
   const [scheduledParties, setScheduledParties] = useState<ScheduledParty[]>([]);
   const [pastParties, setPastParties] = useState<ScheduledParty[]>([]);
   const [snapshots, setSnapshots] = useState<WeeklyFcSnapshot[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [attendanceCounts, setAttendanceCounts] = useState<Record<string, number>>({});
 
   // Filtros en dashboard
   const [searchQuery, setSearchQuery] = useState('');
@@ -59,68 +139,58 @@ export default function Home() {
   const [isMemberProfileModalOpen, setIsMemberProfileModalOpen] = useState(false);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
 
-  // Cargar datos
+  // Carga de datos. `fetchAppData` y `fetchSession` viven fuera del componente y no
+  // tocan el estado: así el efecto de arranque solo escribe estado después de esperar
+  // a la red, y no en cascada durante el render.
+  const applyData = useCallback((data: AppData) => {
+    setMembers(data.members);
+    setProgressMap(data.progressMap);
+    setViableSlotsMap(data.viableSlotsMap);
+    setNearMissSlots(data.nearMissSlots);
+    setScheduledParties(data.scheduledParties);
+    setPastParties(data.pastParties);
+    setAvailabilities(data.availabilities);
+    setSnapshots(data.snapshots);
+    setAttendanceCounts(data.attendanceCounts);
+  }, []);
+
+  /** Recarga todo tras una mutación (guardar progreso, oficializar party, etc.). */
   const loadAllData = useCallback(async () => {
-    try {
-      setLoading(true);
-      const [membersRes, partiesRes, availRes, historyRes] = await Promise.all([
-        fetch('/api/members'),
-        fetch('/api/parties'),
-        fetch('/api/availability'),
-        fetch('/api/history'),
-      ]);
+    applyData(await fetchAppData());
+  }, [applyData]);
 
-      if (membersRes.ok) {
-        const mData = await membersRes.json();
-        setMembers(mData.members || []);
-        setProgressMap(mData.progressMap || {});
-      }
-
-      if (partiesRes.ok) {
-        const pData = await partiesRes.json();
-        setViableSlotsMap(pData.viableSlotsMap || {});
-        setScheduledParties(pData.scheduledParties || []);
-        setPastParties(pData.pastParties || []);
-      }
-
-      if (availRes.ok) {
-        const aData = await availRes.json();
-        setAvailabilities(aData.availabilities || []);
-      }
-
-      if (historyRes.ok) {
-        const hData = await historyRes.json();
-        setSnapshots(hData.snapshots || []);
-      }
-    } catch (err) {
-      console.error('Error cargando datos:', err);
-    } finally {
-      setLoading(false);
-    }
+  /**
+   * La sesión es la cookie httpOnly firmada por el servidor; el cliente solo la
+   * consulta. Antes vivía en localStorage, donde escribir {"type":"ADMIN"} bastaba
+   * para abrir el panel de administración.
+   */
+  const loadSession = useCallback(async () => {
+    setSession(await fetchSession());
   }, []);
 
   useEffect(() => {
-    loadAllData();
+    let cancelled = false;
 
-    // Recuperar sesión guardada en localStorage si existe
-    const savedSession = localStorage.getItem('uwu_tracker_session');
-    if (savedSession) {
-      try {
-        setSession(JSON.parse(savedSession));
-      } catch {
-        localStorage.removeItem('uwu_tracker_session');
-      }
-    }
-  }, [loadAllData]);
+    void (async () => {
+      const [nextSession, data] = await Promise.all([fetchSession(), fetchAppData()]);
+      if (cancelled) return;
+      setSession(nextSession);
+      applyData(data);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applyData]);
 
   const handleSetSession = (newSession: UserSession) => {
     setSession(newSession);
-    localStorage.setItem('uwu_tracker_session', JSON.stringify(newSession));
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
     setSession({ type: 'GUEST' });
-    localStorage.removeItem('uwu_tracker_session');
+    await loadAllData();
   };
 
   // Guardar disponibilidad de usuario
@@ -129,10 +199,7 @@ export default function Home() {
     const res = await fetch('/api/availability', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        memberId: session.memberId,
-        slots,
-      }),
+      body: JSON.stringify({ slots }),
     });
     if (res.ok) {
       await loadAllData();
@@ -170,19 +237,15 @@ export default function Home() {
   const handleConfirmAttendance = async (
     partyId: string,
     memberId: string,
-    status: ConfirmationStatus,
-    isAdminOverride = false
+    status: ConfirmationStatus
   ) => {
     try {
+      // El servidor decide si puede saltarse la ventana de 5 h a partir de la sesión;
+      // el cliente ya no manda ninguna bandera de administrador.
       const res = await fetch('/api/parties/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          partyId,
-          memberId,
-          status,
-          isAdminOverride: session.type === 'ADMIN' || isAdminOverride,
-        }),
+        body: JSON.stringify({ partyId, memberId, status }),
       });
       if (res.ok) {
         await loadAllData();
@@ -203,11 +266,31 @@ export default function Home() {
     }
   };
 
-  // Tomar snapshot histórico semanal (Admin)
-  const handleTakeSnapshot = async () => {
-    const res = await fetch('/api/history', { method: 'POST' });
+  // Tomar o aceptar snapshot histórico semanal (Admin)
+  const handleTakeSnapshot = async (params?: { year?: number; weekNumber?: number }) => {
+    const res = await fetch('/api/history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: params ? JSON.stringify(params) : undefined,
+    });
     if (res.ok) {
       await loadAllData();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || 'Error al archivar la semana');
+    }
+  };
+
+  // Eliminar snapshot histórico semanal (Admin)
+  const handleDeleteSnapshot = async (year: number, weekNumber: number) => {
+    const res = await fetch(`/api/history?year=${year}&weekNumber=${weekNumber}`, {
+      method: 'DELETE',
+    });
+    if (res.ok) {
+      await loadAllData();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || 'Error al eliminar la semana');
     }
   };
 
@@ -246,14 +329,25 @@ export default function Home() {
   }
   const avgFcScore = activeMembersCount > 0 ? Math.round(totalFcScore / activeMembersCount) : 0;
 
-  // Próxima party aceptada (la más próxima en el tiempo que NO haya expirado)
+  // Próxima party aceptada (la más próxima para cada persona que NO haya expirado)
   const activeScheduledParties = scheduledParties.filter(p => !isPartyExpired(p));
   activeScheduledParties.sort((a, b) => {
-    const timeA = new Date(`${a.scheduledDate}T${a.hourSlot.toString().padStart(2, '0')}:00:00`).getTime();
-    const timeB = new Date(`${b.scheduledDate}T${b.hourSlot.toString().padStart(2, '0')}:00:00`).getTime();
-    return timeA - timeB;
+    // getPartyStartDateTime resuelve la hora en la zona de la FC; construir el Date a
+    // partir de la cadena la interpretaba en la hora local del navegador.
+    return (
+      getPartyStartDateTime(a.scheduledDate, a.hourSlot).getTime() -
+      getPartyStartDateTime(b.scheduledDate, b.hourSlot).getTime()
+    );
   });
-  const nextScheduledParty = activeScheduledParties.length > 0 ? activeScheduledParties[0] : null;
+
+  // Para cada persona con sesión iniciada, su party principal es la próxima incursión en la que está convocada.
+  // Si no está convocada en ninguna o si la sesión es ADMIN / GUEST, muestra la próxima party general de la FC.
+  const memberUpcomingParty = session.memberId
+    ? activeScheduledParties.find(p => p.members.some(m => m.memberId === session.memberId))
+    : null;
+  const nextScheduledParty =
+    memberUpcomingParty ||
+    (activeScheduledParties.length > 0 ? activeScheduledParties[0] : null);
 
   // Miembro actualmente conectado
   const currentLoggedInMember = members.find(m => m.id === session.memberId);
@@ -280,19 +374,18 @@ export default function Home() {
       />
 
       <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Banner de Próxima Party Oficial Aceptada */}
-        {nextScheduledParty && (
-          <UpcomingPartyBanner
-            party={nextScheduledParty}
-            currentMemberId={session.memberId}
-            isAdmin={session.type === 'ADMIN'}
-            onConfirmAttendance={handleConfirmAttendance}
-          />
-        )}
-
-        {/* Pestaña: DASHBOARD / NEXO FC */}
+        {/* Pestaña: DASHBOARD / FC */}
         {activeTab === 'dashboard' && (
           <div className="space-y-8 animate-in fade-in duration-300">
+            {/* Banner de Próxima Party Principal (la más próxima para cada persona) */}
+            {nextScheduledParty && (
+              <UpcomingPartyBanner
+                party={nextScheduledParty}
+                currentMemberId={session.memberId}
+                onConfirmAttendance={handleConfirmAttendance}
+              />
+            )}
+
             {/* Hero Card de la FC */}
             <div className="glass-card-glow rounded-3xl p-6 sm:p-8 border border-indigo-500/25 relative overflow-hidden">
               <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-indigo-500/10 via-cyan-500/10 to-transparent rounded-full blur-3xl pointer-events-none" />
@@ -456,7 +549,7 @@ export default function Home() {
                     >
                       <div className="flex items-start justify-between gap-3 mb-3">
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-bold text-white text-base">
                               {m.characterName}
                             </span>
@@ -465,6 +558,12 @@ export default function Home() {
                                 Tú
                               </span>
                             )}
+                            <span
+                              className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-400/30 font-medium shadow-sm"
+                              title={`Ha participado como confirmado en ${attendanceCounts[m.id] ?? 0} incursión(es) oficial(es)`}
+                            >
+                              {attendanceCounts[m.id] ?? 0} incursión{(attendanceCounts[m.id] ?? 0) === 1 ? '' : 'es'}
+                            </span>
                           </div>
                           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                             <JobBadge jobId={m.mainJob} size="sm" isMain={true} />
@@ -514,6 +613,7 @@ export default function Home() {
           <div className="animate-in fade-in duration-300">
             <PartyFinderView
               viableSlotsMap={viableSlotsMap}
+              nearMissSlots={nearMissSlots}
               scheduledParties={scheduledParties}
               pastParties={pastParties}
               session={session}
@@ -529,7 +629,6 @@ export default function Home() {
           <div className="animate-in fade-in duration-300">
             <AvailabilityGrid
               availabilities={availabilities}
-              members={members}
               session={session}
               selectedTimezone={selectedTimezone}
               onSaveAvailability={handleSaveAvailability}
@@ -543,7 +642,10 @@ export default function Home() {
             <HistoricalView
               snapshots={snapshots}
               session={session}
+              members={members}
+              progressMap={progressMap}
               onTakeSnapshot={handleTakeSnapshot}
+              onDeleteSnapshot={handleDeleteSnapshot}
             />
           </div>
         )}
@@ -583,7 +685,7 @@ export default function Home() {
         session={session}
         members={members}
         onAdminLoginSuccess={() => {
-          handleSetSession({ type: 'ADMIN', characterName: 'Administrador' });
+          loadSession();
           loadAllData();
         }}
         onRefreshData={loadAllData}
