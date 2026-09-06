@@ -16,6 +16,41 @@ export const characterNameSchema = z
   .min(3, 'El nombre de personaje debe tener al menos 3 caracteres.')
   .max(100, 'El nombre de personaje es demasiado largo.');
 
+/**
+ * Nombre de personaje: de una a tres palabras, cada una de 2 a 15 caracteres, formadas
+ * solo por letras (con acentos), apóstrofo o guion. Sin dígitos ni símbolos.
+ *
+ * Solo se aplica al registro, nunca al login: endurecer también el login dejaría fuera
+ * a cualquier miembro legítimo ya registrado cuyo nombre no encaje en el patrón.
+ *
+ * Se admite una sola palabra a propósito. Exigir "Nombre Apellido" parecía lo correcto
+ * —es lo que impone FFXIV—, pero el roster real contiene nicks de una palabra ("Eros",
+ * "Kami") de miembros con progreso y disponibilidad registrados. La regla estricta los
+ * habría dejado fuera de su propia Free Company.
+ *
+ * Es la segunda barrera contra el alta automatizada; la primera es el código de
+ * invitación. Basta con prohibir dígitos y símbolos para rechazar las 800 cuentas del
+ * ataque de septiembre de 2026, cuyos nombres eran cadenas base62 aleatorias del tipo
+ * "05Nz1eA75B164Ekf YmzZGkL4ZFPX5NRe" o secuencias de símbolos como "@''#¨Íýlý".
+ */
+export const ffxivCharacterNameSchema = z
+  .string()
+  .trim()
+  .regex(
+    /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'-]{1,14}(?: [A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'-]{1,14}){0,2}$/,
+    'El nombre solo puede contener letras, apóstrofo o guion, en un máximo de tres palabras.'
+  );
+
+/**
+ * Código de invitación de la FC. Solo se valida que venga algo; la comprobación real es
+ * en el servidor: se busca el hash del token y se reclama de forma atómica.
+ */
+export const inviteCodeSchema = z
+  .string()
+  .trim()
+  .min(1, 'El código de invitación es requerido.')
+  .max(200, 'El código de invitación es demasiado largo.');
+
 export const passwordSchema = z
   .string()
   .min(6, 'La contraseña debe tener al menos 6 caracteres.')
@@ -29,6 +64,40 @@ const phasePctSchema = z.coerce
   .min(0, 'No puede ser menor que 0.')
   .max(100, 'No puede ser mayor que 100.');
 
+/**
+ * Un job no puede ser a la vez principal y secundario, ni repetirse entre los flex.
+ *
+ * La interfaz ya lo impedía —el botón del main job ni siquiera se dibuja en la rejilla
+ * de flex—, pero la regla vivía solo en el navegador y el servidor aceptaba cualquier
+ * combinación. El alta masiva de septiembre de 2026 dejó justo esa huella: filas con
+ * `main_job = "SCH"` y `flex_jobs = ["SCH","DRK"]`, imposibles de producir con clics.
+ * Validarlo aquí cierra el hueco y, de paso, mantiene esa huella como señal fiable de
+ * que una fila no salió de la aplicación.
+ */
+function checkJobSelection(
+  data: { mainJob?: JobId; flexJobs?: JobId[] },
+  ctx: z.RefinementCtx
+): void {
+  const { mainJob, flexJobs } = data;
+  if (!flexJobs) return;
+
+  if (mainJob && flexJobs.includes(mainJob)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['flexJobs'],
+      message: 'El main job no puede figurar también como flex job.',
+    });
+  }
+
+  if (new Set(flexJobs).size !== flexJobs.length) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['flexJobs'],
+      message: 'Hay flex jobs repetidos.',
+    });
+  }
+}
+
 // --- Autenticación ---------------------------------------------------------
 
 export const memberLoginSchema = z.object({
@@ -37,19 +106,31 @@ export const memberLoginSchema = z.object({
   password: z.string().min(1, 'La contraseña es requerida.'),
 });
 
-export const memberRegisterSchema = z.object({
-  action: z.literal('register'),
-  characterName: characterNameSchema,
-  password: passwordSchema,
-  mainJob: jobIdSchema,
-  flexJobs: z.array(jobIdSchema).max(20).default([]),
-  tankStance: tankStanceSchema.optional().default(null),
-});
+export const memberRegisterSchema = z
+  .object({
+    action: z.literal('register'),
+    characterName: ffxivCharacterNameSchema,
+    password: passwordSchema,
+    inviteCode: inviteCodeSchema,
+    mainJob: jobIdSchema,
+    flexJobs: z.array(jobIdSchema).max(20).default([]),
+    tankStance: tankStanceSchema.optional().default(null),
+  })
+  .superRefine(checkJobSelection);
 
 export const memberAuthSchema = z.discriminatedUnion('action', [
   memberLoginSchema,
   memberRegisterSchema,
 ]);
+
+/**
+ * Alta de una invitación. La caducidad es opcional: sin ella el token no expira, que es
+ * lo razonable cuando se le pasa a alguien que entrará "cuando pueda".
+ */
+export const createInviteSchema = z.object({
+  label: z.string().trim().max(100).optional(),
+  expiresInDays: z.coerce.number().int().min(1).max(365).nullable().optional(),
+});
 
 export const adminLoginSchema = z.object({
   username: z.string().trim().min(1, 'El usuario es requerido.'),
@@ -88,15 +169,19 @@ export const availabilitySchema = z.object({
 
 // --- Perfil de miembro -----------------------------------------------------
 
-export const memberProfileUpdateSchema = z.object({
-  action: z.literal('updateProfile').optional(),
-  mainJob: jobIdSchema.optional(),
-  flexJobs: z.array(jobIdSchema).max(20).optional(),
-  tankStance: tankStanceSchema.optional(),
-  /** Para cambiar la propia contraseña hay que demostrar que se conoce la actual. */
-  currentPassword: z.string().min(1).optional(),
-  newPassword: passwordSchema.optional(),
-});
+export const memberProfileUpdateSchema = z
+  .object({
+    action: z.literal('updateProfile').optional(),
+    mainJob: jobIdSchema.optional(),
+    flexJobs: z.array(jobIdSchema).max(20).optional(),
+    tankStance: tankStanceSchema.optional(),
+    /** Para cambiar la propia contraseña hay que demostrar que se conoce la actual. */
+    currentPassword: z.string().min(1).optional(),
+    newPassword: passwordSchema.optional(),
+  })
+  // Solo puede comprobar la petición que llega completa. Cuando se envían flex jobs sin
+  // main job, la comparación necesita el valor ya guardado y la hace `updateMemberProfile`.
+  .superRefine(checkJobSelection);
 
 export const adminResetPasswordSchema = z.object({
   action: z.literal('resetPassword'),

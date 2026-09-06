@@ -1,20 +1,28 @@
 import { NextResponse } from 'next/server';
 import { ZodError, type ZodType } from 'zod';
-import { ApiError, AuthError } from './errors';
+import { ApiError, AuthError, RateLimitError } from './errors';
 
-export { ApiError, AuthError } from './errors';
+export { ApiError, AuthError, RateLimitError } from './errors';
 
 /**
  * Traduce cualquier error de un route handler a una respuesta JSON.
  *
- * Los errores de autorización conservan su código (401 / 403) y los de validación
- * devuelven 400 con el detalle por campo. El resto se registra en el servidor y se
+ * Los errores de autorización conservan su código (401 / 403), los de límite de
+ * peticiones responden 429 con `Retry-After` y los de validación devuelven 400 con el
+ * detalle por campo. El resto se registra en el servidor y se
  * responde con un mensaje genérico: antes se devolvía `err.message` tal cual, lo que
  * podía filtrar detalles internos de la base de datos al navegador.
  */
 export function errorResponse(err: unknown): NextResponse {
   if (err instanceof AuthError) {
     return NextResponse.json({ error: err.message }, { status: err.status });
+  }
+
+  if (err instanceof RateLimitError) {
+    return NextResponse.json(
+      { error: err.message },
+      { status: err.status, headers: { 'Retry-After': String(err.retryAfterSeconds) } }
+    );
   }
 
   if (err instanceof ZodError) {

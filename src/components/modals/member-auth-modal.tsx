@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { JobId, TankStance, UserSession } from '@/types';
 import { FFXIV_JOBS, SUBROLE_LABELS } from '@/lib/ffxiv-jobs';
-import { Sparkles, User, Lock, X } from 'lucide-react';
+import { Sparkles, User, Lock, KeyRound, X } from 'lucide-react';
 
 interface MemberAuthModalProps {
   isOpen: boolean;
@@ -15,6 +15,7 @@ export default function MemberAuthModal({ isOpen, onClose, onAuthSuccess }: Memb
   const [tab, setTab] = useState<'login' | 'register'>('login');
   const [characterName, setCharacterName] = useState('');
   const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [mainJob, setMainJob] = useState<JobId>('WAR');
   const [flexJobs, setFlexJobs] = useState<JobId[]>([]);
   const [tankStance, setTankStance] = useState<TankStance>('MT');
@@ -43,19 +44,30 @@ export default function MemberAuthModal({ isOpen, onClose, onAuthSuccess }: Memb
       const res = await fetch('/api/auth/member', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: tab,
-          characterName,
-          password,
-          mainJob,
-          flexJobs,
-          tankStance: isTankSelected ? tankStance : null,
-        }),
+        // En el login solo viajan las credenciales: el resto de campos son del alta.
+        body: JSON.stringify(
+          tab === 'login'
+            ? { action: 'login', characterName, password }
+            : {
+                action: 'register',
+                characterName,
+                password,
+                inviteCode,
+                mainJob,
+                flexJobs,
+                tankStance: isTankSelected ? tankStance : null,
+              }
+        ),
       });
 
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Error en autenticación');
+        // Los errores de validación traen el detalle por campo. Sin esto el usuario solo
+        // leería "Datos inválidos." y no sabría que falla el formato del nombre.
+        const detail = Array.isArray(data.details)
+          ? data.details.map((d: { problema: string }) => d.problema).join(' ')
+          : null;
+        throw new Error(detail || data.error || 'Error en autenticación');
       }
 
       // La sesión real es la cookie httpOnly que acaba de fijar el servidor; esto solo
@@ -111,7 +123,7 @@ export default function MemberAuthModal({ isOpen, onClose, onAuthSuccess }: Memb
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            Autoregistro Libre
+            Registro con Código
           </button>
         </div>
 
@@ -154,6 +166,28 @@ export default function MemberAuthModal({ isOpen, onClose, onAuthSuccess }: Memb
 
           {tab === 'register' && (
             <>
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  Código de Invitación
+                </label>
+                <div className="relative">
+                  <KeyRound className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    required
+                    value={inviteCode}
+                    onChange={e => setInviteCode(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="Pídeselo a un oficial en el Discord de la FC"
+                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  El registro está restringido a miembros de Lux Obscura.
+                </p>
+              </div>
+
               <div>
                 <label className="block text-slate-300 font-semibold mb-1">Main Job (Rol Principal)</label>
                 <select

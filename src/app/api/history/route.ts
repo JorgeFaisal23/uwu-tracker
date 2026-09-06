@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { StorageService } from '@/lib/storage';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireSession } from '@/lib/session';
 import { errorResponse } from '@/lib/api';
 
+/** Histórico semanal. Leerlo basta con tener sesión; archivarlo o borrarlo, no. */
 export async function GET() {
   try {
+    await requireSession();
+
     const snapshots = await StorageService.getWeeklySnapshots();
     return NextResponse.json({ snapshots });
   } catch (err) {

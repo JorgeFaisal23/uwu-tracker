@@ -25,3 +25,19 @@ export class AuthError extends Error {
     this.name = 'AuthError';
   }
 }
+
+/**
+ * Se superó el límite de peticiones. Lleva su propio tipo porque la respuesta 429 debe
+ * incluir la cabecera `Retry-After`, y para eso hace falta saber cuántos segundos faltan.
+ */
+export class RateLimitError extends Error {
+  readonly status = 429 as const;
+
+  constructor(
+    message: string,
+    readonly retryAfterSeconds: number
+  ) {
+    super(message);
+    this.name = 'RateLimitError';
+  }
+}

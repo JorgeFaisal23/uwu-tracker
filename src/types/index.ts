@@ -165,3 +165,21 @@ export interface UserSession {
   memberId?: string;
   characterName?: string;
 }
+
+/**
+ * Invitación de un solo uso para darse de alta.
+ *
+ * El token en claro no vive aquí ni en la base: solo su hash. Se muestra una única vez,
+ * cuando el administrador lo genera.
+ */
+export interface InviteToken {
+  id: string;
+  label: string | null;
+  createdAt: string;
+  expiresAt: string | null;
+  usedAt: string | null;
+  usedByName: string | null;
+  revokedAt: string | null;
+  /** Estado derivado, calculado al leer: es lo que se pinta en el panel. */
+  status: 'PENDING' | 'USED' | 'EXPIRED' | 'REVOKED';
+}

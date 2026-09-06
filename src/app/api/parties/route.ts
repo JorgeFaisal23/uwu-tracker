@@ -3,13 +3,21 @@ import { StorageService } from '@/lib/storage';
 import { scanAllViableSlots, diagnoseAllNearMissSlots } from '@/lib/party-matcher';
 import { getNextDateForDayOfWeek } from '@/lib/date-utils';
 import { schedulePartySchema } from '@/lib/schemas';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireSession } from '@/lib/session';
 import { errorResponse, parseBody } from '@/lib/api';
 import { DAYS_OF_WEEK, formatHourOnly } from '@/lib/timezones';
 import { notifyPartyScheduled, notifyPartyCancelled } from '@/lib/discord';
 
+/**
+ * Exige sesión por dos motivos. Expone el roster y los horarios, y además es con
+ * diferencia la lectura más cara de la aplicación: `scanAllViableSlots` y
+ * `diagnoseAllNearMissSlots` recorren la disponibilidad de toda la FC en cada llamada,
+ * sin caché. Abierto era el mejor candidato para agotar la cuota de la función.
+ */
 export async function GET() {
   try {
+    await requireSession();
+
     const [members, progressMap, availabilities, scheduledParties, pastParties, attendanceCounts] =
       await Promise.all([
         StorageService.getMembers(),

@@ -1,8 +1,10 @@
 import 'server-only';
 
+import { cache } from 'react';
 import { cookies } from 'next/headers';
 import { SignJWT, jwtVerify } from 'jose';
 import { AuthError } from './errors';
+import { StorageService } from './storage';
 
 const COOKIE_NAME = 'uwu_session';
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 días
@@ -17,6 +19,16 @@ export interface SessionPayload {
 }
 
 
+
+/**
+ * Comprobación de alta, memoizada por petición.
+ *
+ * `verifySession` se llama varias veces en una misma petición —la página servidor y
+ * luego cualquier handler que consulte— y sin `cache` cada llamada repetiría la consulta.
+ */
+const memberSigueDeAlta = cache(
+  async (memberId: string): Promise<boolean> => StorageService.isMemberActive(memberId)
+);
 
 function getSecretKey(): Uint8Array {
   const secret = process.env.SESSION_SECRET;
@@ -71,14 +83,25 @@ export async function verifySession(): Promise<SessionPayload | null> {
 
     if (payload.type !== 'ADMIN' && payload.type !== 'MEMBER') return null;
 
+    const memberId = typeof payload.memberId === 'string' ? payload.memberId : undefined;
+
+    // La firma solo prueba que la cookie salió de aquí, no que quien la lleva siga en la
+    // FC. Una baja es lógica, así que sin esto la sesión de alguien expulsado seguía
+    // sirviendo hasta siete días después.
+    if (payload.type === 'MEMBER') {
+      if (!memberId) return null;
+      if (!(await memberSigueDeAlta(memberId))) return null;
+    }
+
     return {
       type: payload.type,
-      memberId: typeof payload.memberId === 'string' ? payload.memberId : undefined,
+      memberId,
       characterName:
         typeof payload.characterName === 'string' ? payload.characterName : undefined,
     };
   } catch {
-    // Firma inválida, token manipulado o caducado.
+    // Firma inválida, token manipulado o caducado. También cae aquí un fallo al consultar
+    // el alta: ante la duda se responde "sin sesión", que es el lado seguro del error.
     return null;
   }
 }

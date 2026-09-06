@@ -4,8 +4,15 @@ import { availabilitySchema } from '@/lib/schemas';
 import { requireSession } from '@/lib/session';
 import { errorResponse, parseBody } from '@/lib/api';
 
+/**
+ * Disponibilidad de todos los miembros. Exige sesión: es el dato más sensible que
+ * guarda la aplicación —a qué hora está cada persona frente al ordenador, cada día de
+ * la semana— y estaba saliendo sin credencial ninguna.
+ */
 export async function GET() {
   try {
+    await requireSession();
+
     const availabilities = await StorageService.getAvailabilities();
     return NextResponse.json({ availabilities });
   } catch (err) {

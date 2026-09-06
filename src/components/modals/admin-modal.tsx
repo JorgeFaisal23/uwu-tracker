@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
-import { Member, UserSession } from '@/types';
-import { ShieldCheck, Lock, User, KeyRound, Trash2, X, Check } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { InviteToken, Member, UserSession } from '@/types';
+import { ShieldCheck, Lock, User, KeyRound, Trash2, X, Check, Ticket, Copy, Ban } from 'lucide-react';
 
 interface AdminModalProps {
   isOpen: boolean;
@@ -30,6 +30,81 @@ export default function AdminModal({
   const [resettingMemberId, setResettingMemberId] = useState<string | null>(null);
   const [newMemberPassword, setNewMemberPassword] = useState('');
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+
+  // Invitaciones
+  const [tab, setTab] = useState<'members' | 'invites'>('members');
+  const [invites, setInvites] = useState<InviteToken[]>([]);
+  const [inviteLabel, setInviteLabel] = useState('');
+  const [inviteDays, setInviteDays] = useState('7');
+  const [nuevoToken, setNuevoToken] = useState<string | null>(null);
+  const [copiado, setCopiado] = useState(false);
+
+  const cargarInvitaciones = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/invites');
+      if (!res.ok) return;
+      const data = await res.json();
+      setInvites(data.invites ?? []);
+    } catch {
+      // Un fallo al listar no debe romper el panel; el error real se ve al crear o revocar.
+    }
+  }, []);
+
+  const handleCrearInvitacion = async () => {
+    setLoading(true);
+    setError(null);
+    setNuevoToken(null);
+    setCopiado(false);
+    try {
+      const res = await fetch('/api/admin/invites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: inviteLabel.trim() || undefined,
+          expiresInDays: inviteDays === '' ? null : Number(inviteDays),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error al crear la invitación');
+
+      setNuevoToken(data.token);
+      setInviteLabel('');
+      await cargarInvitaciones();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Error al crear la invitación');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRevocar = async (id: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/invites/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error al revocar');
+
+      setActionSuccess('Invitación revocada.');
+      setTimeout(() => setActionSuccess(null), 3000);
+      await cargarInvitaciones();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Error al revocar');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const copiarToken = async () => {
+    if (!nuevoToken) return;
+    try {
+      await navigator.clipboard.writeText(nuevoToken);
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2000);
+    } catch {
+      // Sin permiso de portapapeles el token sigue visible para seleccionarlo a mano.
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -184,6 +259,152 @@ export default function AdminModal({
         ) : (
           /* Si YA está logueado como Admin: Panel de Gestión */
           <div className="space-y-5 text-xs">
+            {/* Pestañas */}
+            <div className="flex rounded-xl bg-slate-900/80 p-1 border border-white/5">
+              <button
+                type="button"
+                onClick={() => { setTab('members'); setError(null); }}
+                className={`flex-1 py-2 font-bold rounded-lg transition-all ${
+                  tab === 'members'
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-400/30 shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Miembros ({members.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => { setTab('invites'); setError(null); cargarInvitaciones(); }}
+                className={`flex-1 py-2 font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                  tab === 'invites'
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-400/30 shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Ticket className="w-3.5 h-3.5" />
+                <span>Invitaciones</span>
+              </button>
+            </div>
+
+            {tab === 'invites' ? (
+              <div className="space-y-4">
+                {/* Token recién creado: es la única vez que puede verse */}
+                {nuevoToken && (
+                  <div className="p-3 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 space-y-2">
+                    <div className="text-emerald-300 font-bold flex items-center gap-1.5">
+                      <Check className="w-4 h-4" />
+                      <span>Invitación creada. Cópiala ahora.</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 px-3 py-2 rounded-lg bg-slate-950 border border-emerald-500/30 text-emerald-200 font-mono text-sm tracking-wider break-all">
+                        {nuevoToken}
+                      </code>
+                      <button
+                        onClick={copiarToken}
+                        className="p-2 rounded-lg bg-emerald-600/30 text-emerald-200 hover:bg-emerald-600/50 transition-all shrink-0"
+                        title="Copiar"
+                      >
+                        {copiado ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-emerald-400/70">
+                      No se volverá a mostrar: en la base solo queda su hash. Si la pierdes,
+                      revócala y crea otra.
+                    </p>
+                  </div>
+                )}
+
+                {/* Crear */}
+                <div className="p-3 rounded-2xl bg-slate-900/60 border border-white/5 space-y-2.5">
+                  <div className="font-semibold text-slate-300">Nueva invitación</div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={inviteLabel}
+                      onChange={e => setInviteLabel(e.target.value)}
+                      placeholder="¿Para quién? (opcional)"
+                      className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-white/10 text-white text-xs placeholder:text-slate-500"
+                    />
+                    <select
+                      value={inviteDays}
+                      onChange={e => setInviteDays(e.target.value)}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-950 border border-white/10 text-white text-xs"
+                    >
+                      <option value="1">1 día</option>
+                      <option value="7">7 días</option>
+                      <option value="30">30 días</option>
+                      <option value="">Sin caducidad</option>
+                    </select>
+                  </div>
+                  <button
+                    onClick={handleCrearInvitacion}
+                    disabled={loading}
+                    className="w-full py-2 rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold transition-all disabled:opacity-50"
+                  >
+                    {loading ? 'Generando...' : 'Generar invitación'}
+                  </button>
+                </div>
+
+                {/* Listado */}
+                <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+                  {invites.length === 0 && (
+                    <p className="text-slate-500 text-center py-4">
+                      No hay invitaciones. Genera una para que alguien pueda registrarse.
+                    </p>
+                  )}
+                  {invites.map(inv => {
+                    const estilo = {
+                      PENDING: 'bg-cyan-500/20 text-cyan-300',
+                      USED: 'bg-slate-600/30 text-slate-400',
+                      EXPIRED: 'bg-orange-500/20 text-orange-300',
+                      REVOKED: 'bg-red-500/20 text-red-300',
+                    }[inv.status];
+                    const etiqueta = {
+                      PENDING: 'Pendiente',
+                      USED: 'Usada',
+                      EXPIRED: 'Caducada',
+                      REVOKED: 'Revocada',
+                    }[inv.status];
+
+                    return (
+                      <div
+                        key={inv.id}
+                        className="p-2.5 rounded-xl bg-slate-900/60 border border-white/5 flex items-center justify-between gap-2"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${estilo}`}>
+                              {etiqueta}
+                            </span>
+                            <span className="text-white font-semibold truncate">
+                              {inv.label || 'Sin etiqueta'}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            {inv.usedByName
+                              ? `La usó ${inv.usedByName}`
+                              : `Creada el ${new Date(inv.createdAt).toLocaleDateString('es')}`}
+                            {inv.expiresAt && inv.status === 'PENDING' &&
+                              ` · caduca el ${new Date(inv.expiresAt).toLocaleDateString('es')}`}
+                          </div>
+                        </div>
+
+                        {inv.status === 'PENDING' && (
+                          <button
+                            onClick={() => handleRevocar(inv.id)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-all shrink-0"
+                            title="Revocar"
+                          >
+                            <Ban className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+            <>
             <div className="flex items-center justify-between text-slate-300">
               <span className="font-semibold">Miembros de la Free Company ({members.length})</span>
               <span className="text-[11px] text-slate-400">Acciones de mantenimiento</span>
@@ -246,6 +467,8 @@ export default function AdminModal({
                 </div>
               ))}
             </div>
+            </>
+            )}
           </div>
         )}
       </div>

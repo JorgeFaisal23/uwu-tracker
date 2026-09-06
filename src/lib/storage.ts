@@ -11,6 +11,7 @@ import {
   TankStance,
   UwuProgress,
   WeeklyFcSnapshot,
+  InviteToken,
 } from '@/types';
 import { calculateOverallScore, clampPhasePct, getCurrentPhaseName } from './ffxiv-jobs';
 import {
@@ -20,7 +21,8 @@ import {
   isPartyExpired,
 } from './date-utils';
 import { getSupabase, unwrap } from './supabase';
-import { ApiError } from './errors';
+import { ApiError, AuthError } from './errors';
+import { generateInviteToken, hashInviteToken } from './auth';
 import bcrypt from 'bcryptjs';
 
 const SALT_ROUNDS = 10;
@@ -92,6 +94,17 @@ interface PartyRow {
   notes: string | null;
   created_at: string;
   party_schedule_members: PartyMemberRow[] | null;
+}
+
+interface InviteTokenRow {
+  id: string;
+  label: string | null;
+  created_at: string;
+  expires_at: string | null;
+  used_at: string | null;
+  used_by_member_id: string | null;
+  used_by_name: string | null;
+  revoked_at: string | null;
 }
 
 const PARTY_SELECT = '*, party_schedule_members(*)';
@@ -187,6 +200,30 @@ function toHistoryEntry(row: HistoryRow): ProgressHistoryEntry {
   };
 }
 
+/**
+ * El estado no se guarda como columna: se deriva al leer, para que no pueda quedar
+ * desincronizado de las fechas que realmente lo determinan (igual que `overall_score`
+ * o `currentPhaseName`).
+ */
+function toInviteToken(row: InviteTokenRow): InviteToken {
+  const status: InviteToken['status'] =
+    row.revoked_at ? 'REVOKED'
+    : row.used_at ? 'USED'
+    : row.expires_at && new Date(row.expires_at) <= new Date() ? 'EXPIRED'
+    : 'PENDING';
+
+  return {
+    id: row.id,
+    label: row.label,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    usedAt: row.used_at,
+    usedByName: row.used_by_name,
+    revokedAt: row.revoked_at,
+    status,
+  };
+}
+
 // --- Servicio ---------------------------------------------------------------
 
 /**
@@ -227,6 +264,31 @@ export class StorageService {
     }
 
     return data ? toMember(data as MemberRow) : undefined;
+  }
+
+  /**
+   * Si el miembro sigue de alta. Es lo que consulta cada petición autenticada, así que
+   * pide solo el id en vez de la fila entera.
+   *
+   * `deleteMember` es una baja lógica (`is_active = false`) para no romper el histórico
+   * ni las parties pasadas. Sin esta comprobación la cookie firmada seguía siendo válida
+   * hasta su caducidad —siete días— y quien acabara de ser expulsado conservaba permiso
+   * de escritura sobre su progreso y su disponibilidad.
+   */
+  static async isMemberActive(id: string): Promise<boolean> {
+    const { data, error } = await getSupabase()
+      .from('members')
+      .select('id')
+      .eq('id', id)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[storage] isMemberActive:', error);
+      throw new Error('Error de base de datos en isMemberActive');
+    }
+
+    return data !== null;
   }
 
   static async getMemberByName(name: string): Promise<Member | undefined> {
@@ -300,6 +362,18 @@ export class StorageService {
       newPasswordPlain?: string;
     }
   ): Promise<Member> {
+    // El esquema solo valida lo que trae la petición. Si llegan flex jobs sin main job,
+    // la comprobación "un job no es principal y secundario a la vez" necesita el valor
+    // ya guardado, así que se resuelve aquí sobre el estado combinado.
+    if (data.flexJobs && data.mainJob === undefined) {
+      const current = await this.getMemberById(id);
+      if (!current) throw new ApiError('Miembro no encontrado.', 404);
+
+      if (data.flexJobs.includes(current.mainJob)) {
+        throw new ApiError('El main job no puede figurar también como flex job.', 400);
+      }
+    }
+
     const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
     if (data.mainJob !== undefined) patch.main_job = data.mainJob;
@@ -730,6 +804,121 @@ export class StorageService {
     );
 
     return buildSnapshot(inserted.map(toHistoryEntry));
+  }
+
+  // --- Invitaciones ---
+
+  /**
+   * Crea una invitación y devuelve el token EN CLARO.
+   *
+   * Es la única vez que ese valor existe fuera de quien lo recibe: en la base solo queda
+   * su SHA-256. Si el administrador lo pierde, revoca el token y genera otro.
+   */
+  static async createInviteToken(params: {
+    label?: string | null;
+    expiresInDays?: number | null;
+  }): Promise<{ token: string; invite: InviteToken }> {
+    const token = generateInviteToken();
+
+    const expiresAt =
+      params.expiresInDays != null
+        ? new Date(Date.now() + params.expiresInDays * 24 * 60 * 60 * 1000).toISOString()
+        : null;
+
+    const { data, error } = await getSupabase()
+      .from('invite_tokens')
+      .insert({
+        token_hash: hashInviteToken(token),
+        label: params.label?.trim() || null,
+        expires_at: expiresAt,
+      })
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('[storage] createInviteToken:', error);
+      throw new Error('Error de base de datos en createInviteToken');
+    }
+
+    return { token, invite: toInviteToken(data as InviteTokenRow) };
+  }
+
+  static async getInviteTokens(): Promise<InviteToken[]> {
+    const rows = unwrap<InviteTokenRow[]>(
+      await getSupabase()
+        .from('invite_tokens')
+        .select('*')
+        .order('created_at', { ascending: false }),
+      'getInviteTokens'
+    );
+
+    return rows.map(toInviteToken);
+  }
+
+  /**
+   * Reclama un token para un alta.
+   *
+   * Va por una función de PostgreSQL porque el "comprobar que está libre" y el "marcarlo
+   * como usado" tienen que ocurrir en la misma operación: hacerlo en dos consultas
+   * dejaría una ventana en la que dos personas podrían gastar la misma invitación.
+   *
+   * Devuelve el id reclamado, que hay que confirmar con `confirmInviteToken` o devolver
+   * con `releaseInviteToken` si el alta acaba fallando.
+   */
+  static async claimInviteToken(rawToken: string): Promise<string> {
+    const { data, error } = await getSupabase().rpc('claim_invite_token', {
+      p_token_hash: hashInviteToken(rawToken),
+    });
+
+    if (error) {
+      console.error('[storage] claimInviteToken:', error);
+      throw new Error('Error de base de datos en claimInviteToken');
+    }
+
+    const filas = (data ?? []) as { id: string }[];
+
+    // Un token inexistente, ya gastado, revocado o caducado son el mismo mensaje: no
+    // tiene sentido decirle a quien lo intenta en cuál de los cuatro casos está.
+    if (filas.length === 0) {
+      throw new AuthError('El código de invitación no es válido o ya se ha usado.', 403);
+    }
+
+    return filas[0].id;
+  }
+
+  /** Deja constancia de quién gastó la invitación. */
+  static async confirmInviteToken(id: string, member: Member): Promise<void> {
+    const { error } = await getSupabase()
+      .from('invite_tokens')
+      .update({ used_by_member_id: member.id, used_by_name: member.characterName })
+      .eq('id', id);
+
+    // No se propaga: el miembro ya está creado y su alta es válida. Perder la anotación
+    // de quién usó el token no justifica devolverle un error a quien se acaba de registrar.
+    if (error) console.error('[storage] confirmInviteToken:', error);
+  }
+
+  /** Devuelve el token al estado disponible cuando el alta falló después de reclamarlo. */
+  static async releaseInviteToken(id: string): Promise<void> {
+    const { error } = await getSupabase().rpc('release_invite_token', { p_id: id });
+    if (error) console.error('[storage] releaseInviteToken:', error);
+  }
+
+  /** Anula una invitación no usada. Las ya gastadas se conservan como registro. */
+  static async revokeInviteToken(id: string): Promise<void> {
+    const { data, error } = await getSupabase()
+      .from('invite_tokens')
+      .update({ revoked_at: new Date().toISOString() })
+      .eq('id', id)
+      .is('used_at', null)
+      .select('id')
+      .maybeSingle();
+
+    if (error) {
+      console.error('[storage] revokeInviteToken:', error);
+      throw new Error('Error de base de datos en revokeInviteToken');
+    }
+    if (!data) throw new ApiError('La invitación no existe o ya se ha usado.', 404);
   }
 
   /**
