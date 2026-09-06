@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { JobId, Member, MemberProgress, ProgressMode, SubRole, TankStance } from '@/types';
-import { adjustPhaseProgressOnEdit, FFXIV_JOBS, normalizePhaseProgress, SUBROLE_LABELS, UWU_PHASES } from '@/lib/ffxiv-jobs';
+import { adjustPhaseProgressOnEdit, FFXIV_JOBS, getActiveBreakpoint, normalizePhaseProgress, SUBROLE_LABELS, UWU_PHASES } from '@/lib/ffxiv-jobs';
 import { editableSubroles, resolveRoleProgress } from '@/lib/progress';
 import { APP_VERSION } from '@/lib/changelog';
 import RoleProgressChips from '@/components/role-progress-chips';
@@ -425,12 +425,20 @@ function MemberProfileModalContent({
                     phase.id === 2 ? p2 :
                     phase.id === 3 ? p3 :
                     phase.id === 4 ? p4 : p5;
+                  const activeBp = getActiveBreakpoint(phase, val);
 
                   return (
-                    <div key={phase.id} className="p-3 rounded-2xl bg-slate-900/60 border border-white/5 text-xs">
+                    <div key={phase.id} className="p-3.5 rounded-2xl bg-slate-900/60 border border-white/5 text-xs">
                       <div className="flex items-center justify-between mb-1.5">
                         <span className="font-bold text-white">{phase.name}</span>
-                        <span className="font-mono font-bold text-cyan-300">{val}%</span>
+                        <div className="flex items-center gap-2">
+                          {activeBp && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-400/30 font-medium">
+                              {activeBp.name}
+                            </span>
+                          )}
+                          <span className="font-mono font-bold text-cyan-300">{val}%</span>
+                        </div>
                       </div>
                       <input
                         type="range"
@@ -443,9 +451,46 @@ function MemberProfileModalContent({
                       />
                       <div className="flex justify-between text-[10px] text-slate-500 mt-1">
                         <span>0%</span>
-                        <span>50%</span>
+                        {phase.breakpoints && phase.breakpoints.length > 0 ? (
+                          <span className="text-slate-400 font-medium">Breakpoints abajo</span>
+                        ) : (
+                          <span>50%</span>
+                        )}
                         <span>100% (Clean)</span>
                       </div>
+
+                      {/* Breakpoints interactivos */}
+                      {phase.breakpoints && phase.breakpoints.length > 0 && (
+                        <div className="mt-3 pt-2.5 border-t border-white/5">
+                          <div className="text-[10px] font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                            <span>Breakpoints clave:</span>
+                            <span className="text-[9px] text-slate-500">Haz clic para fijar</span>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                            {phase.breakpoints.map(bp => {
+                              const isReached = val >= bp.pct;
+                              const isExact = val === bp.pct;
+                              return (
+                                <button
+                                  key={bp.name}
+                                  type="button"
+                                  onClick={() => handlePhaseChange(phase.id, bp.pct)}
+                                  className={`px-2 py-1.5 rounded-lg text-[10px] font-medium transition-all text-left flex flex-col justify-between border cursor-pointer ${
+                                    isExact
+                                      ? 'bg-cyan-500/25 border-cyan-400 text-cyan-100 shadow-[0_0_12px_rgba(56,189,248,0.3)] ring-1 ring-cyan-400/60'
+                                      : isReached
+                                      ? 'bg-slate-800/80 border-cyan-500/40 text-slate-200 hover:border-cyan-400/60 hover:bg-cyan-950/30'
+                                      : 'bg-slate-900/50 border-white/5 text-slate-400 hover:border-white/20 hover:text-slate-300'
+                                  }`}
+                                >
+                                  <span className="truncate font-semibold">{bp.name}</span>
+                                  <span className="font-mono text-[9px] text-cyan-400/90">{bp.pct}%</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

@@ -1,5 +1,5 @@
 import { UwuProgress } from '@/types';
-import { UWU_PHASES } from '@/lib/ffxiv-jobs';
+import { getActiveBreakpoint, UWU_PHASES } from '@/lib/ffxiv-jobs';
 import { Sparkles } from 'lucide-react';
 
 interface UwuPhaseTrackerProps {
@@ -43,11 +43,16 @@ export default function UwuPhaseTracker({
         <div className="grid grid-cols-5 gap-1 h-2 w-full bg-slate-900/80 rounded-full p-0.5 border border-white/5 overflow-hidden">
           {UWU_PHASES.map((phase, idx) => {
             const pct = pcts[idx] || 0;
+            const activeBp = getActiveBreakpoint(phase, pct);
+            const tooltipTitle = activeBp
+              ? `${phase.name}: ${pct}% (${activeBp.name})`
+              : `${phase.name}: ${pct}%`;
+
             return (
               <div
                 key={phase.id}
                 className="relative h-full bg-slate-800/80 rounded-full overflow-hidden"
-                title={`${phase.name}: ${pct}%`}
+                title={tooltipTitle}
               >
                 <div
                   className="h-full rounded-full transition-all duration-700 ease-out"
@@ -57,6 +62,13 @@ export default function UwuPhaseTracker({
                     boxShadow: pct > 0 ? `0 0 8px ${phase.color}` : 'none',
                   }}
                 />
+                {phase.breakpoints?.map(bp => (
+                  <div
+                    key={bp.name}
+                    className="absolute top-0 bottom-0 w-0.5 bg-white/40 pointer-events-none z-10"
+                    style={{ left: `${bp.pct}%` }}
+                  />
+                ))}
               </div>
             );
           })}
@@ -109,6 +121,7 @@ export default function UwuPhaseTracker({
           const pct = pcts[idx] || 0;
           const isComplete = pct >= 100;
           const isActive = pct > 0 && pct < 100;
+          const activeBp = getActiveBreakpoint(phase, pct);
 
           return (
             <div
@@ -122,9 +135,11 @@ export default function UwuPhaseTracker({
               }`}
             >
               <div className="flex items-center justify-between text-xs mb-1.5">
-                <span className="font-semibold text-slate-300">{phase.shortName}</span>
+                <span className="font-semibold text-slate-300 truncate mr-1" title={phase.shortName}>
+                  {phase.shortName}
+                </span>
                 <span
-                  className="font-mono font-bold"
+                  className="font-mono font-bold shrink-0"
                   style={{ color: isComplete ? '#34d399' : phase.color }}
                 >
                   {pct}%
@@ -132,7 +147,7 @@ export default function UwuPhaseTracker({
               </div>
 
               {/* Barra de Cristal */}
-              <div className="w-full bg-slate-950/80 rounded-full h-2 overflow-hidden border border-white/5">
+              <div className="relative w-full bg-slate-950/80 rounded-full h-2 overflow-hidden border border-white/5">
                 <div
                   className="h-full rounded-full transition-all duration-700"
                   style={{
@@ -141,14 +156,27 @@ export default function UwuPhaseTracker({
                     boxShadow: pct > 0 ? `0 0 10px ${phase.color}` : 'none',
                   }}
                 />
+                {phase.breakpoints?.map(bp => (
+                  <div
+                    key={bp.name}
+                    className="absolute top-0 bottom-0 w-0.5 bg-white/40 pointer-events-none z-10"
+                    style={{ left: `${bp.pct}%` }}
+                    title={`${bp.name}: ${bp.pct}%`}
+                  />
+                ))}
               </div>
 
-              <div className="mt-2 text-[11px] text-slate-400 flex items-center justify-between">
-                <span>Fase {phase.id}</span>
+              <div className="mt-2 text-[11px] text-slate-400 flex items-center justify-between gap-1">
+                <span className="shrink-0">Fase {phase.id}</span>
                 {isComplete ? (
                   <span className="text-emerald-400 font-bold text-[10px]">DOMINADA</span>
                 ) : isActive ? (
-                  <span className="text-cyan-300 font-medium text-[10px] animate-pulse">EN PROGRESO</span>
+                  <span
+                    className="text-cyan-300 font-medium text-[10px] animate-pulse truncate text-right"
+                    title={activeBp ? activeBp.name : 'EN PROGRESO'}
+                  >
+                    {activeBp ? activeBp.name : 'EN PROGRESO'}
+                  </span>
                 ) : (
                   <span className="text-slate-500 text-[10px]">Pendiente</span>
                 )}

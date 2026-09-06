@@ -310,9 +310,9 @@ export default function HistoricalView({
                     {activeSnapshot.phaseDistribution.cleared > 0
                       ? '¡UWU CLEARED!'
                       : activeSnapshot.phaseDistribution.enrage > 0
-                      ? 'Fase 5: Enrage'
+                      ? 'Fase 5: Ultima Weapon'
                       : activeSnapshot.phaseDistribution.ultima > 0
-                      ? 'Fase 4: Ultima'
+                      ? 'Fase 4: Lahabrea'
                       : activeSnapshot.phaseDistribution.titan > 0
                       ? 'Fase 3: Titan'
                       : 'Fase 2: Ifrit'}
@@ -355,7 +355,7 @@ export default function HistoricalView({
                   </div>
 
                   <div className="p-3 rounded-xl bg-purple-950/30 border border-purple-500/30">
-                    <div className="text-xs text-purple-300 font-semibold">F4: Ultima</div>
+                    <div className="text-xs text-purple-300 font-semibold">F4: Lahabrea</div>
                     <div className="text-xl font-bold font-mono text-white mt-1">
                       {activeSnapshot.phaseDistribution.ultima}
                     </div>
@@ -363,7 +363,7 @@ export default function HistoricalView({
                   </div>
 
                   <div className="p-3 rounded-xl bg-cyan-950/30 border border-cyan-500/30">
-                    <div className="text-xs text-cyan-300 font-semibold">F5: Enrage</div>
+                    <div className="text-xs text-cyan-300 font-semibold">F5: Ultima Weapon</div>
                     <div className="text-xl font-bold font-mono text-white mt-1">
                       {activeSnapshot.phaseDistribution.enrage}
                     </div>
@@ -394,8 +394,8 @@ export default function HistoricalView({
                         <th className="py-2.5 px-3">Garuda</th>
                         <th className="py-2.5 px-3">Ifrit</th>
                         <th className="py-2.5 px-3">Titan</th>
-                        <th className="py-2.5 px-3">Ultima</th>
-                        <th className="py-2.5 px-3">Roulettes</th>
+                        <th className="py-2.5 px-3">Lahabrea</th>
+                        <th className="py-2.5 px-3">Ultima Weapon</th>
                         <th className="py-2.5 px-3 text-right">Score Total</th>
                       </tr>
                     </thead>

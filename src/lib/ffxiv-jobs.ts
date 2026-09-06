@@ -221,12 +221,36 @@ export const SUBROLE_LABELS: Record<SubRole, string> = {
   CASTER: 'Magical Ranged DPS',
 };
 
-export const UWU_PHASES = [
+export interface PhaseBreakpoint {
+  name: string;
+  pct: number;
+}
+
+export interface PhaseConfig {
+  id: number;
+  name: string;
+  shortName: string;
+  color: string;
+  breakpoints?: PhaseBreakpoint[];
+}
+
+export const UWU_PHASES: PhaseConfig[] = [
   { id: 1, name: 'Fase 1: Garuda', shortName: 'Garuda', color: '#34d399' },
   { id: 2, name: 'Fase 2: Ifrit', shortName: 'Ifrit', color: '#f87171' },
   { id: 3, name: 'Fase 3: Titan', shortName: 'Titan', color: '#fbbf24' },
-  { id: 4, name: 'Fase 4: The Ultima Weapon', shortName: 'Ultima', color: '#a855f7' },
-  { id: 5, name: 'Fase 5: Primal Roulettes / Enrage', shortName: 'Final', color: '#38bdf8' },
+  { id: 4, name: 'Fase 4: Lahabrea', shortName: 'Lahabrea', color: '#a855f7' },
+  {
+    id: 5,
+    name: 'Fase 5: Ultima Weapon',
+    shortName: 'Ultima Weapon',
+    color: '#38bdf8',
+    breakpoints: [
+      { name: 'Ultimate Predation', pct: 60 },
+      { name: 'Ultimate Annihilation', pct: 70 },
+      { name: 'Ultimate Suppression', pct: 80 },
+      { name: 'Primal Roulette', pct: 92 },
+    ],
+  },
 ];
 
 /**
@@ -252,12 +276,28 @@ export function calculateOverallScore(p1: number, p2: number, p3: number, p4: nu
 }
 
 export function getCurrentPhaseName(p1: number, p2: number, p3: number, p4: number, p5: number): string {
-  if (p5 >= 100) return '¡Clear / Enrage 100%!';
-  if (p5 > 0) return `Fase 5: Roulettes (${p5}%)`;
-  if (p4 > 0) return `Fase 4: Ultima Weapon (${p4}%)`;
-  if (p3 > 0) return `Fase 3: Titan (${p3}%)`;
-  if (p2 > 0) return `Fase 2: Ifrit (${p2}%)`;
-  return `Fase 1: Garuda (${p1 || 0}%)`;
+  const p5Clamped = clampPhasePct(p5);
+  if (p5Clamped >= 100) return '¡Clear / Enrage 100%!';
+  if (p5Clamped >= 92) return `Fase 5: Primal Roulette (${p5Clamped}%)`;
+  if (p5Clamped >= 80) return `Fase 5: Ultimate Suppression (${p5Clamped}%)`;
+  if (p5Clamped >= 70) return `Fase 5: Ultimate Annihilation (${p5Clamped}%)`;
+  if (p5Clamped >= 60) return `Fase 5: Ultimate Predation (${p5Clamped}%)`;
+  if (p5Clamped > 0) return `Fase 5: Ultima Weapon (${p5Clamped}%)`;
+  const p4Clamped = clampPhasePct(p4);
+  if (p4Clamped > 0) return `Fase 4: Lahabrea (${p4Clamped}%)`;
+  const p3Clamped = clampPhasePct(p3);
+  if (p3Clamped > 0) return `Fase 3: Titan (${p3Clamped}%)`;
+  const p2Clamped = clampPhasePct(p2);
+  if (p2Clamped > 0) return `Fase 2: Ifrit (${p2Clamped}%)`;
+  const p1Clamped = clampPhasePct(p1);
+  return `Fase 1: Garuda (${p1Clamped}%)`;
+}
+
+export function getActiveBreakpoint(phase: PhaseConfig, pct: number): PhaseBreakpoint | null {
+  if (!phase.breakpoints || phase.breakpoints.length === 0) return null;
+  const clamped = clampPhasePct(pct);
+  const sorted = [...phase.breakpoints].sort((a, b) => b.pct - a.pct);
+  return sorted.find(bp => clamped >= bp.pct) || null;
 }
 
 export function canPlayTankStance(stance: TankStance | null | undefined, requiredStance: 'MT' | 'OT'): boolean {

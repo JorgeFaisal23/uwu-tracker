@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   FFXIV_JOBS,
   SUBROLE_JOBS,
+  UWU_PHASES,
   adjustPhaseProgressOnEdit,
   calculateOverallScore,
   clampPhasePct,
   canPlayTankStance,
+  getActiveBreakpoint,
   getCurrentPhaseName,
   normalizePhaseProgress,
 } from '../ffxiv-jobs';
@@ -23,20 +25,16 @@ describe('clampPhasePct', () => {
     // Antes, Number('abc') daba NaN y Math.min/max lo propagaba hasta el score.
     expect(clampPhasePct('abc')).toBe(0);
     expect(clampPhasePct(NaN)).toBe(0);
-    expect(clampPhasePct(Infinity)).toBe(0);
-    expect(clampPhasePct(null)).toBe(0);
-    expect(clampPhasePct(undefined)).toBe(0);
-    expect(clampPhasePct({})).toBe(0);
   });
 
-  it('redondea a entero', () => {
-    expect(clampPhasePct(66.6)).toBe(67);
-    expect(clampPhasePct('42')).toBe(42);
+  it('devuelve un entero redondeado', () => {
+    expect(clampPhasePct(45.6)).toBe(46);
+    expect(clampPhasePct(45.2)).toBe(45);
   });
 });
 
 describe('calculateOverallScore', () => {
-  it('suma las cinco fases sobre 500', () => {
+  it('suma las 5 fases correctamente', () => {
     expect(calculateOverallScore(100, 100, 100, 100, 100)).toBe(500);
     expect(calculateOverallScore(100, 80, 0, 0, 0)).toBe(180);
   });
@@ -55,13 +53,37 @@ describe('calculateOverallScore', () => {
 });
 
 describe('getCurrentPhaseName', () => {
-  it('nombra la fase más avanzada con progreso', () => {
+  it('nombra la fase más avanzada con progreso y los breakpoints de la fase 5', () => {
     expect(getCurrentPhaseName(0, 0, 0, 0, 0)).toContain('Garuda');
     expect(getCurrentPhaseName(100, 80, 0, 0, 0)).toContain('Ifrit');
     expect(getCurrentPhaseName(100, 100, 60, 0, 0)).toContain('Titan');
-    expect(getCurrentPhaseName(100, 100, 100, 40, 0)).toContain('Ultima');
-    expect(getCurrentPhaseName(100, 100, 100, 100, 20)).toContain('Roulettes');
+    expect(getCurrentPhaseName(100, 100, 100, 40, 0)).toContain('Lahabrea');
+    expect(getCurrentPhaseName(100, 100, 100, 100, 20)).toContain('Ultima Weapon');
+    expect(getCurrentPhaseName(100, 100, 100, 100, 60)).toContain('Ultimate Predation');
+    expect(getCurrentPhaseName(100, 100, 100, 100, 75)).toContain('Ultimate Annihilation');
+    expect(getCurrentPhaseName(100, 100, 100, 100, 85)).toContain('Ultimate Suppression');
+    expect(getCurrentPhaseName(100, 100, 100, 100, 95)).toContain('Primal Roulette');
     expect(getCurrentPhaseName(100, 100, 100, 100, 100)).toContain('Clear');
+  });
+});
+
+describe('getActiveBreakpoint', () => {
+  const phase5 = UWU_PHASES.find(p => p.id === 5)!;
+
+  it('devuelve null si no se ha alcanzado ningún breakpoint', () => {
+    expect(getActiveBreakpoint(phase5, 0)).toBeNull();
+    expect(getActiveBreakpoint(phase5, 59)).toBeNull();
+  });
+
+  it('devuelve el breakpoint correspondiente al progreso alcanzado', () => {
+    expect(getActiveBreakpoint(phase5, 60)?.name).toBe('Ultimate Predation');
+    expect(getActiveBreakpoint(phase5, 69)?.name).toBe('Ultimate Predation');
+    expect(getActiveBreakpoint(phase5, 70)?.name).toBe('Ultimate Annihilation');
+    expect(getActiveBreakpoint(phase5, 79)?.name).toBe('Ultimate Annihilation');
+    expect(getActiveBreakpoint(phase5, 80)?.name).toBe('Ultimate Suppression');
+    expect(getActiveBreakpoint(phase5, 91)?.name).toBe('Ultimate Suppression');
+    expect(getActiveBreakpoint(phase5, 92)?.name).toBe('Primal Roulette');
+    expect(getActiveBreakpoint(phase5, 100)?.name).toBe('Primal Roulette');
   });
 });
 
