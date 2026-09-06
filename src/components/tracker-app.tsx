@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
+import { useState, useEffect, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { 
   Member, 
@@ -11,7 +11,10 @@ import {
   WeeklyFcSnapshot, 
   UserSession,
   ConfirmationStatus,
-  SlotDiagnostic
+  SlotDiagnostic,
+  PromotedRecruitment,
+  JobId,
+  SlotRole,
 } from '@/types';
 import { getPartyStartDateTime, isPartyExpired } from '@/lib/date-utils';
 import { SUBROLE_LABELS, emptyMemberProgress, memberDisplayProgress } from '@/lib/progress';
@@ -37,6 +40,7 @@ import MemberAuthModal from '@/components/modals/member-auth-modal';
 import ChangelogModal from '@/components/modals/changelog-modal';
 import MemberProfileModal from '@/components/modals/member-profile-modal';
 import AdminModal from '@/components/modals/admin-modal';
+import PartyVolunteerModal, { VolunteerModalTarget } from '@/components/modals/party-volunteer-modal';
 import { Users, Search, ArrowUpDown } from 'lucide-react';
 
 interface AppData {
@@ -47,6 +51,7 @@ interface AppData {
   nearMissSlots: SlotDiagnostic[];
   scheduledParties: ScheduledParty[];
   pastParties: ScheduledParty[];
+  promotedRecruitments: PromotedRecruitment[];
   snapshots: WeeklyFcSnapshot[];
   attendanceCounts: Record<string, number>;
 }
@@ -59,6 +64,7 @@ const EMPTY_APP_DATA: AppData = {
   nearMissSlots: [],
   scheduledParties: [],
   pastParties: [],
+  promotedRecruitments: [],
   snapshots: [],
   attendanceCounts: {},
 };
@@ -93,6 +99,7 @@ async function fetchAppData(): Promise<AppData> {
         nearMissSlots?: SlotDiagnostic[];
         scheduledParties?: ScheduledParty[];
         pastParties?: ScheduledParty[];
+        promotedRecruitments?: PromotedRecruitment[];
       }),
       readJson(availRes, {} as { availabilities?: MemberAvailability[] }),
       readJson(historyRes, {} as { snapshots?: WeeklyFcSnapshot[] }),
@@ -105,6 +112,7 @@ async function fetchAppData(): Promise<AppData> {
       nearMissSlots: partiesData.nearMissSlots ?? [],
       scheduledParties: partiesData.scheduledParties ?? [],
       pastParties: partiesData.pastParties ?? [],
+      promotedRecruitments: partiesData.promotedRecruitments ?? [],
       availabilities: availData.availabilities ?? [],
       snapshots: historyData.snapshots ?? [],
       attendanceCounts: membersData.attendanceCounts ?? {},
@@ -148,8 +156,13 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
   const [nearMissSlots, setNearMissSlots] = useState<SlotDiagnostic[]>([]);
   const [scheduledParties, setScheduledParties] = useState<ScheduledParty[]>([]);
   const [pastParties, setPastParties] = useState<ScheduledParty[]>([]);
+  const [promotedRecruitments, setPromotedRecruitments] = useState<PromotedRecruitment[]>([]);
   const [snapshots, setSnapshots] = useState<WeeklyFcSnapshot[]>([]);
   const [attendanceCounts, setAttendanceCounts] = useState<Record<string, number>>({});
+
+  // Modal para voluntarios / suplentes
+  const [isVolunteerModalOpen, setIsVolunteerModalOpen] = useState(false);
+  const [volunteerModalTarget, setVolunteerModalTarget] = useState<VolunteerModalTarget | null>(null);
 
   // Filtros en dashboard
   const [searchQuery, setSearchQuery] = useState('');
@@ -173,6 +186,7 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
     setNearMissSlots(data.nearMissSlots);
     setScheduledParties(data.scheduledParties);
     setPastParties(data.pastParties);
+    setPromotedRecruitments(data.promotedRecruitments ?? []);
     setAvailabilities(data.availabilities);
     setSnapshots(data.snapshots);
     setAttendanceCounts(data.attendanceCounts);
@@ -323,6 +337,98 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
     }
   };
 
+  const handleOpenVolunteerModal = useCallback((target: VolunteerModalTarget) => {
+    setVolunteerModalTarget(target);
+    setIsVolunteerModalOpen(true);
+  }, []);
+
+  const handleSubmitVolunteer = useCallback(
+    async (data: {
+      partyScheduleId?: string;
+      slotKey?: string;
+      assignedJob: JobId;
+      assignedRole: string;
+      availabilityNote?: string;
+    }) => {
+      const res = await fetch('/api/parties/volunteer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Error al guardar ofrecimiento de ayuda');
+      }
+      await loadAllData();
+    },
+    [loadAllData]
+  );
+
+  const handleRemoveVolunteer = useCallback(
+    async (data: { partyScheduleId?: string; slotKey?: string }) => {
+      const params = new URLSearchParams();
+      if (data.partyScheduleId) params.set('partyScheduleId', data.partyScheduleId);
+      if (data.slotKey) params.set('slotKey', data.slotKey);
+      const res = await fetch(`/api/parties/volunteer?${params.toString()}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Error al retirar ofrecimiento de ayuda');
+      }
+      await loadAllData();
+    },
+    [loadAllData]
+  );
+
+  const handlePromoteSlot = useCallback(
+    async (
+      slotKey: string,
+      dayOfWeek: number,
+      hourSlot: number,
+      missingSlots: SlotRole[],
+      notes?: string
+    ) => {
+      const res = await fetch('/api/parties/promote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slotKey, dayOfWeek, hourSlot, missingSlots, notes }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Error al promover la franja');
+      }
+      await loadAllData();
+    },
+    [loadAllData]
+  );
+
+  const handleClosePromotion = useCallback(
+    async (slotKey: string) => {
+      const res = await fetch(`/api/parties/promote?slotKey=${encodeURIComponent(slotKey)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Error al cerrar convocatoria');
+      }
+      await loadAllData();
+    },
+    [loadAllData]
+  );
+
+  const currentVolunteerEntry = useMemo(() => {
+    if (!volunteerModalTarget || !session.memberId) return null;
+    if (volunteerModalTarget.type === 'SCHEDULED_PARTY') {
+      return (
+        volunteerModalTarget.party.volunteers?.find(v => v.memberId === session.memberId) || null
+      );
+    } else {
+      const rec = promotedRecruitments.find(r => r.slotKey === volunteerModalTarget.slotKey);
+      return rec?.volunteers?.find(v => v.memberId === session.memberId) || null;
+    }
+  }, [volunteerModalTarget, session.memberId, promotedRecruitments]);
+
   // Tomar o aceptar snapshot histórico semanal (Admin)
   const handleTakeSnapshot = async (params?: { year?: number; weekNumber?: number }) => {
     const res = await fetch('/api/history', {
@@ -442,6 +548,7 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
                 party={nextScheduledParty}
                 currentMemberId={session.memberId}
                 onConfirmAttendance={handleConfirmAttendance}
+                onVolunteerClick={party => handleOpenVolunteerModal({ type: 'SCHEDULED_PARTY', party })}
               />
             )}
 
@@ -681,10 +788,14 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
               nearMissSlots={nearMissSlots}
               scheduledParties={scheduledParties}
               pastParties={pastParties}
+              promotedRecruitments={promotedRecruitments}
               session={session}
               onAcceptParty={handleAcceptParty}
               onCancelParty={handleCancelParty}
               onConfirmAttendance={handleConfirmAttendance}
+              onVolunteerClick={handleOpenVolunteerModal}
+              onPromoteSlot={handlePromoteSlot}
+              onClosePromotion={handleClosePromotion}
             />
           </div>
         )}
@@ -762,6 +873,16 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
         onClose={handleCloseChangelog}
         characterName={session.characterName}
         isAutoOpened={hasUnseenChangelog && !isChangelogRequested}
+      />
+
+      <PartyVolunteerModal
+        isOpen={isVolunteerModalOpen}
+        onClose={() => setIsVolunteerModalOpen(false)}
+        target={volunteerModalTarget}
+        currentMember={members.find(m => m.id === session.memberId)}
+        existingVolunteer={currentVolunteerEntry}
+        onSubmit={handleSubmitVolunteer}
+        onRemove={handleRemoveVolunteer}
       />
     </div>
   );

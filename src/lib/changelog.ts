@@ -9,7 +9,7 @@
  * `CHANGELOG`. Con eso, a cada persona le vuelve a salir la ventana una sola vez.
  */
 
-export const APP_VERSION = '0.2';
+export const APP_VERSION = '0.2.1';
 
 export interface ChangelogEntry {
   /** Titular corto, tal cual lo nombraría un miembro de la FC. */
@@ -28,6 +28,34 @@ export interface ChangelogRelease {
 }
 
 export const CHANGELOG: ChangelogRelease[] = [
+  {
+    version: '0.2.1',
+    date: 'Septiembre 2026',
+    headline:
+      'Buscador de parties más potente, suplentes para incursiones y fases de Ultima Weapon detalladas.',
+    entries: [
+      {
+        title: 'Fases 4 y 5 corregidas con mecánicas de Ultima',
+        description:
+          'La Fase 4 ahora es Lahabrea y la Fase 5 es Ultima Weapon. Además, la barra de progreso de Ultima Weapon cuenta con marcadores visuales para sus mecánicas principales (Predation, Annihilation, Suppression y Primal Roulette), indicando con claridad qué punto de la pelea estás practicando.',
+      },
+      {
+        title: 'Explorador de combinaciones con filtros y paginación',
+        description:
+          'Navega y examina cómodamente todas las alternativas de party generadas para una franja horaria: filtra por miembro participante, job, fase promedio o número de main jobs, ordénalas según tu objetivo y copia el formato para Discord con un solo clic.',
+      },
+      {
+        title: 'Postúlate como suplente ("¡Puedo ayudar!")',
+        description:
+          'Si no estás dentro de una party oficial programada pero tienes disponibilidad, ahora puedes ofrecerte como suplente indicando el rol y job que puedes cubrir junto con una nota para el líder.',
+      },
+      {
+        title: 'Convocatorias para franjas casi listas',
+        description:
+          'Cuando un horario concurrido esté a punto de completarse y solo necesite uno o dos roles, los administradores pueden abrir una convocatoria destacada para que los miembros de la FC se sumen y alcancen el 8/8.',
+      },
+    ],
+  },
   {
     version: '0.2',
     date: 'Septiembre 2026',

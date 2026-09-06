@@ -173,6 +173,31 @@ export interface ScheduledPartyMember {
   confirmedAt?: string;
 }
 
+export interface PartyVolunteer {
+  id: string;
+  partyScheduleId?: string | null;
+  slotKey?: string | null;
+  memberId: string;
+  characterName: string;
+  assignedJob: JobId;
+  assignedRole: string; // SlotRole o rol general (ej. 'TANK', 'HEALER', etc.)
+  availabilityNote?: string;
+  createdAt: string;
+}
+
+export interface PromotedRecruitment {
+  id: string;
+  slotKey: string; // ej. "1_21"
+  dayOfWeek: number;
+  hourSlot: number;
+  notes?: string;
+  missingSlots: SlotRole[];
+  status: 'OPEN' | 'CLOSED';
+  createdBy: string;
+  createdAt: string;
+  volunteers?: PartyVolunteer[];
+}
+
 export interface ScheduledParty {
   id: string;
   scheduledDate: string; // Formato 'YYYY-MM-DD'
@@ -184,6 +209,7 @@ export interface ScheduledParty {
   notes?: string;
   createdAt: string;
   members: ScheduledPartyMember[];
+  volunteers?: PartyVolunteer[];
 }
 
 export interface UserSession {

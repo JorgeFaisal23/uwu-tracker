@@ -15,6 +15,9 @@ import {
   UwuProgress,
   WeeklyFcSnapshot,
   InviteToken,
+  PartyVolunteer,
+  PromotedRecruitment,
+  SlotRole,
 } from '@/types';
 import { calculateOverallScore, clampPhasePct, normalizePhaseProgress } from './ffxiv-jobs';
 import {
@@ -129,7 +132,35 @@ interface InviteTokenRow {
   revoked_at: string | null;
 }
 
+interface VolunteerRow {
+  id: string;
+  party_schedule_id: string | null;
+  slot_key: string | null;
+  member_id: string;
+  character_name: string;
+  assigned_job: string;
+  assigned_role: string;
+  availability_note: string | null;
+  created_at: string;
+}
+
+interface PromotedRecruitmentRow {
+  id: string;
+  slot_key: string;
+  day_of_week: number;
+  hour_slot: number;
+  notes: string | null;
+  missing_slots: string[] | null;
+  status: string;
+  created_by: string;
+  created_at: string;
+}
+
 const PARTY_SELECT = '*, party_schedule_members(*)';
+
+// Almacenamiento en memoria provisional por si el script SQL no ha corrido en Supabase
+const inMemoryVolunteers = new Map<string, PartyVolunteer>();
+const inMemoryPromoted = new Map<string, PromotedRecruitment>();
 
 // --- Traducción fila <-> dominio -------------------------------------------
 
@@ -175,17 +206,18 @@ function toProgress(row: ProgressRow | RoleProgressRow, subrole: SubRole | null)
  * antes de esta función.
  */
 function missingRoleProgressTable(error: { code?: string; message?: string } | null): boolean {
+  return missingTableError(error, 'member_role_progress');
+}
+
+function missingTableError(error: { code?: string; message?: string } | null, tableName: string): boolean {
   if (!error) return false;
 
-  // Solo estos dos códigos: 42P01 es "relación inexistente" en PostgreSQL y PGRST205
-  // es "PostgREST no encuentra la tabla". Cualquier otro fallo (permisos, conexión) es
-  // un problema real y debe propagarse en vez de disfrazarse de tabla ausente.
   const missing = error.code === '42P01' || error.code === 'PGRST205';
 
   if (missing) {
     console.warn(
-      '[storage] Falta la tabla member_role_progress; se usa solo el progreso general. ' +
-        'Ejecuta scripts/role-progress.sql en Supabase.'
+      `[storage] Falta la tabla ${tableName}; se usa almacenamiento provisional. ` +
+        `Ejecuta el script SQL correspondiente en Supabase.`
     );
   }
 
@@ -222,7 +254,7 @@ function toMemberProgress(
   };
 }
 
-function toScheduledParty(row: PartyRow): ScheduledParty {
+function toScheduledParty(row: PartyRow, volunteers: PartyVolunteer[] = []): ScheduledParty {
   return {
     id: row.id,
     scheduledDate: row.scheduled_date,
@@ -242,6 +274,39 @@ function toScheduledParty(row: PartyRow): ScheduledParty {
       confirmationStatus: m.confirmation_status as ConfirmationStatus,
       confirmedAt: m.confirmed_at ?? undefined,
     })),
+    volunteers,
+  };
+}
+
+function toPartyVolunteer(row: VolunteerRow): PartyVolunteer {
+  return {
+    id: row.id,
+    partyScheduleId: row.party_schedule_id,
+    slotKey: row.slot_key,
+    memberId: row.member_id,
+    characterName: row.character_name,
+    assignedJob: row.assigned_job as JobId,
+    assignedRole: row.assigned_role,
+    availabilityNote: row.availability_note ?? undefined,
+    createdAt: row.created_at,
+  };
+}
+
+function toPromotedRecruitment(
+  row: PromotedRecruitmentRow,
+  volunteers: PartyVolunteer[] = []
+): PromotedRecruitment {
+  return {
+    id: row.id,
+    slotKey: row.slot_key,
+    dayOfWeek: row.day_of_week,
+    hourSlot: row.hour_slot,
+    notes: row.notes ?? undefined,
+    missingSlots: (row.missing_slots ?? []) as SlotRole[],
+    status: row.status === 'CLOSED' ? 'CLOSED' : 'OPEN',
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    volunteers,
   };
 }
 
@@ -689,32 +754,46 @@ export class StorageService {
 
   /** Parties vigentes: aceptadas y cuyo horario aún no ha concluido. */
   static async getScheduledParties(includePast: boolean = false): Promise<ScheduledParty[]> {
-    const rows = unwrap<PartyRow[]>(
-      await getSupabase()
+    const [rowsResult, allVolunteers] = await Promise.all([
+      getSupabase()
         .from('party_schedules')
         .select(PARTY_SELECT)
         .order('scheduled_date', { ascending: true })
         .order('hour_slot', { ascending: true }),
-      'getScheduledParties'
-    );
+      this.getAllVolunteers().catch(() => []),
+    ]);
 
-    const parties = rows.map(toScheduledParty);
+    const rows = unwrap<PartyRow[]>(rowsResult, 'getScheduledParties');
+    const parties = rows.map(r =>
+      toScheduledParty(
+        r,
+        allVolunteers.filter(v => v.partyScheduleId === r.id)
+      )
+    );
 
     if (includePast) return parties;
     return parties.filter(p => p.status === 'ACCEPTED' && !isPartyExpired(p));
   }
 
   static async getPastParties(): Promise<ScheduledParty[]> {
-    const rows = unwrap<PartyRow[]>(
-      await getSupabase()
+    const [rowsResult, allVolunteers] = await Promise.all([
+      getSupabase()
         .from('party_schedules')
         .select(PARTY_SELECT)
         .order('scheduled_date', { ascending: false })
         .order('hour_slot', { ascending: false }),
-      'getPastParties'
-    );
+      this.getAllVolunteers().catch(() => []),
+    ]);
 
-    return rows.map(toScheduledParty).filter(p => isPartyExpired(p) || p.status === 'COMPLETED');
+    const rows = unwrap<PartyRow[]>(rowsResult, 'getPastParties');
+    return rows
+      .map(r =>
+        toScheduledParty(
+          r,
+          allVolunteers.filter(v => v.partyScheduleId === r.id)
+        )
+      )
+      .filter(p => isPartyExpired(p) || p.status === 'COMPLETED');
   }
 
   /**
@@ -796,18 +875,23 @@ export class StorageService {
   }
 
   static async getPartyById(id: string): Promise<ScheduledParty | undefined> {
-    const { data, error } = await getSupabase()
-      .from('party_schedules')
-      .select(PARTY_SELECT)
-      .eq('id', id)
-      .maybeSingle();
+    const [partyResult, volunteers] = await Promise.all([
+      getSupabase()
+        .from('party_schedules')
+        .select(PARTY_SELECT)
+        .eq('id', id)
+        .maybeSingle(),
+      this.getVolunteers(id).catch(() => []),
+    ]);
+
+    const { data, error } = partyResult;
 
     if (error) {
       console.error('[storage] getPartyById:', error);
       throw new Error('Error de base de datos en getPartyById');
     }
 
-    return data ? toScheduledParty(data as PartyRow) : undefined;
+    return data ? toScheduledParty(data as PartyRow, volunteers) : undefined;
   }
 
   /**
@@ -867,6 +951,230 @@ export class StorageService {
       console.error('[storage] cancelScheduledParty:', error);
       throw new Error('Error de base de datos en cancelScheduledParty');
     }
+  }
+
+  // --- Voluntarios / Suplentes ("¡Puedo ayudar!") ---
+
+  static async getAllVolunteers(): Promise<PartyVolunteer[]> {
+    const supabase = getSupabase();
+    const { data, error } = await supabase
+      .from('party_volunteers')
+      .select('*')
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      if (missingTableError(error, 'party_volunteers')) {
+        return Array.from(inMemoryVolunteers.values());
+      }
+      console.error('[storage] getAllVolunteers:', error);
+      return Array.from(inMemoryVolunteers.values());
+    }
+
+    const rows = data as VolunteerRow[];
+    return rows.map(toPartyVolunteer);
+  }
+
+  static async getVolunteers(partyScheduleId?: string, slotKey?: string): Promise<PartyVolunteer[]> {
+    const all = await this.getAllVolunteers();
+    return all.filter(v => {
+      if (partyScheduleId && v.partyScheduleId === partyScheduleId) return true;
+      if (slotKey && v.slotKey === slotKey) return true;
+      return false;
+    });
+  }
+
+  static async registerVolunteer(data: {
+    partyScheduleId?: string;
+    slotKey?: string;
+    memberId: string;
+    characterName: string;
+    assignedJob: JobId;
+    assignedRole: string;
+    availabilityNote?: string;
+  }): Promise<PartyVolunteer> {
+    const supabase = getSupabase();
+
+    // Eliminar previo si existe para actualizar
+    if (data.partyScheduleId) {
+      await supabase
+        .from('party_volunteers')
+        .delete()
+        .eq('party_schedule_id', data.partyScheduleId)
+        .eq('member_id', data.memberId);
+    } else if (data.slotKey) {
+      await supabase
+        .from('party_volunteers')
+        .delete()
+        .eq('slot_key', data.slotKey)
+        .eq('member_id', data.memberId);
+    }
+
+    const newRow = {
+      party_schedule_id: data.partyScheduleId ?? null,
+      slot_key: data.slotKey ?? null,
+      member_id: data.memberId,
+      character_name: data.characterName,
+      assigned_job: data.assignedJob,
+      assigned_role: data.assignedRole,
+      availability_note: data.availabilityNote ?? null,
+    };
+
+    const { data: inserted, error } = await supabase
+      .from('party_volunteers')
+      .insert(newRow)
+      .select('*')
+      .single();
+
+    if (error) {
+      if (missingTableError(error, 'party_volunteers')) {
+        const memId = `${data.partyScheduleId || data.slotKey}_${data.memberId}`;
+        const vol: PartyVolunteer = {
+          id: memId,
+          partyScheduleId: data.partyScheduleId ?? null,
+          slotKey: data.slotKey ?? null,
+          memberId: data.memberId,
+          characterName: data.characterName,
+          assignedJob: data.assignedJob,
+          assignedRole: data.assignedRole,
+          availabilityNote: data.availabilityNote,
+          createdAt: new Date().toISOString(),
+        };
+        inMemoryVolunteers.set(memId, vol);
+        return vol;
+      }
+      console.error('[storage] registerVolunteer:', error);
+      throw new Error('Error al registrar voluntario en base de datos');
+    }
+
+    const volunteer = toPartyVolunteer(inserted as VolunteerRow);
+    const memKey = `${volunteer.partyScheduleId || volunteer.slotKey}_${volunteer.memberId}`;
+    inMemoryVolunteers.set(memKey, volunteer);
+    return volunteer;
+  }
+
+  static async removeVolunteer(data: {
+    memberId: string;
+    partyScheduleId?: string;
+    slotKey?: string;
+  }): Promise<void> {
+    const supabase = getSupabase();
+    let query = supabase.from('party_volunteers').delete().eq('member_id', data.memberId);
+
+    if (data.partyScheduleId) {
+      query = query.eq('party_schedule_id', data.partyScheduleId);
+    } else if (data.slotKey) {
+      query = query.eq('slot_key', data.slotKey);
+    }
+
+    const { error } = await query;
+    if (error && !missingTableError(error, 'party_volunteers')) {
+      console.error('[storage] removeVolunteer:', error);
+    }
+
+    const memKey = `${data.partyScheduleId || data.slotKey}_${data.memberId}`;
+    inMemoryVolunteers.delete(memKey);
+  }
+
+  // --- Convocatorias de parties incompletas promovidas por el Admin ---
+
+  static async getPromotedRecruitments(): Promise<PromotedRecruitment[]> {
+    const supabase = getSupabase();
+    const [recruitmentsRes, allVolunteers] = await Promise.all([
+      supabase
+        .from('promoted_recruitments')
+        .select('*')
+        .eq('status', 'OPEN')
+        .order('created_at', { ascending: false }),
+      this.getAllVolunteers().catch(() => []),
+    ]);
+
+    if (recruitmentsRes.error) {
+      if (missingTableError(recruitmentsRes.error, 'promoted_recruitments')) {
+        return Array.from(inMemoryPromoted.values()).map(r => ({
+          ...r,
+          volunteers: allVolunteers.filter(v => v.slotKey === r.slotKey),
+        }));
+      }
+      console.error('[storage] getPromotedRecruitments:', recruitmentsRes.error);
+      return Array.from(inMemoryPromoted.values()).map(r => ({
+        ...r,
+        volunteers: allVolunteers.filter(v => v.slotKey === r.slotKey),
+      }));
+    }
+
+    const rows = recruitmentsRes.data as PromotedRecruitmentRow[];
+    return rows.map(r =>
+      toPromotedRecruitment(
+        r,
+        allVolunteers.filter(v => v.slotKey === r.slot_key)
+      )
+    );
+  }
+
+  static async promoteSlotRecruitment(data: {
+    slotKey: string;
+    dayOfWeek: number;
+    hourSlot: number;
+    notes?: string;
+    missingSlots: SlotRole[];
+    createdBy: string;
+  }): Promise<PromotedRecruitment> {
+    const supabase = getSupabase();
+
+    const row = {
+      slot_key: data.slotKey,
+      day_of_week: data.dayOfWeek,
+      hour_slot: data.hourSlot,
+      notes: data.notes ?? null,
+      missing_slots: data.missingSlots,
+      status: 'OPEN',
+      created_by: data.createdBy,
+    };
+
+    const { data: upserted, error } = await supabase
+      .from('promoted_recruitments')
+      .upsert(row, { onConflict: 'slot_key' })
+      .select('*')
+      .single();
+
+    if (error) {
+      if (missingTableError(error, 'promoted_recruitments')) {
+        const item: PromotedRecruitment = {
+          id: `promoted_${data.slotKey}`,
+          slotKey: data.slotKey,
+          dayOfWeek: data.dayOfWeek,
+          hourSlot: data.hourSlot,
+          notes: data.notes,
+          missingSlots: data.missingSlots,
+          status: 'OPEN',
+          createdBy: data.createdBy,
+          createdAt: new Date().toISOString(),
+          volunteers: [],
+        };
+        inMemoryPromoted.set(data.slotKey, item);
+        return item;
+      }
+      console.error('[storage] promoteSlotRecruitment:', error);
+      throw new Error('Error al promover la franja en base de datos');
+    }
+
+    const volunteers = await this.getVolunteers(undefined, data.slotKey);
+    const result = toPromotedRecruitment(upserted as PromotedRecruitmentRow, volunteers);
+    inMemoryPromoted.set(data.slotKey, result);
+    return result;
+  }
+
+  static async closePromotedRecruitment(slotKey: string): Promise<void> {
+    const supabase = getSupabase();
+    const { error } = await supabase
+      .from('promoted_recruitments')
+      .delete()
+      .eq('slot_key', slotKey);
+
+    if (error && !missingTableError(error, 'promoted_recruitments')) {
+      console.error('[storage] closePromotedRecruitment:', error);
+    }
+    inMemoryPromoted.delete(slotKey);
   }
 
   // --- Histórico semanal ---

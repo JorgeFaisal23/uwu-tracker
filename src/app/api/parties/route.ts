@@ -18,15 +18,23 @@ export async function GET() {
   try {
     await requireSession();
 
-    const [members, progressMap, availabilities, scheduledParties, pastParties, attendanceCounts] =
-      await Promise.all([
-        StorageService.getMembers(),
-        StorageService.getProgressMap(),
-        StorageService.getAvailabilities(),
-        StorageService.getScheduledParties(false),
-        StorageService.getPastParties(),
-        StorageService.getAttendanceCounts(),
-      ]);
+    const [
+      members,
+      progressMap,
+      availabilities,
+      scheduledParties,
+      pastParties,
+      attendanceCounts,
+      promotedRecruitments,
+    ] = await Promise.all([
+      StorageService.getMembers(),
+      StorageService.getProgressMap(),
+      StorageService.getAvailabilities(),
+      StorageService.getScheduledParties(false),
+      StorageService.getPastParties(),
+      StorageService.getAttendanceCounts(),
+      StorageService.getPromotedRecruitments(),
+    ]);
 
     const viableSlotsMap = scanAllViableSlots(
       availabilities,
@@ -36,7 +44,13 @@ export async function GET() {
     );
     const nearMissSlots = diagnoseAllNearMissSlots(availabilities, members, progressMap);
 
-    return NextResponse.json({ viableSlotsMap, scheduledParties, pastParties, nearMissSlots });
+    return NextResponse.json({
+      viableSlotsMap,
+      scheduledParties,
+      pastParties,
+      nearMissSlots,
+      promotedRecruitments,
+    });
   } catch (err) {
     return errorResponse(err);
   }

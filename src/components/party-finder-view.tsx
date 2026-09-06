@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { PartyCombination, ScheduledParty, UserSession, ConfirmationStatus } from '@/types';
 import { DAYS_OF_WEEK, formatHourSlot } from '@/lib/timezones';
 import JobBadge from './job-badge';
+import SlotPartiesBrowser from './slot-parties-browser';
 import { 
   Sparkles, 
   Calendar, 
@@ -20,8 +21,14 @@ import {
   AlertTriangle,
   History,
   Copy,
-  Download
+  Download,
+  HandHeart,
+  Flame,
+  Megaphone,
+  MegaphoneOff
 } from 'lucide-react';
+import { PromotedRecruitment } from '@/types';
+import { VolunteerModalTarget } from './modals/party-volunteer-modal';
 import { 
   getNextDateForDayOfWeek, 
   getTodayDateString, 
@@ -48,9 +55,27 @@ function formatMissingSlots(slots: SlotRole[]): string {
   return slots.map(s => ROLE_NAMES[s] ?? s).join(', ');
 }
 
-function NearMissSlotCard({ diag }: { diag: SlotDiagnostic }) {
+function NearMissSlotCard({
+  diag,
+  promoted,
+  session,
+  onVolunteerClick,
+  onPromote,
+  onClosePromotion,
+}: {
+  diag: SlotDiagnostic;
+  promoted?: PromotedRecruitment;
+  session: UserSession;
+  onVolunteerClick?: (target: VolunteerModalTarget) => void;
+  onPromote?: (diag: SlotDiagnostic) => void;
+  onClosePromotion?: (slotKey: string) => void;
+}) {
   const dayName = DAYS_OF_WEEK.find(d => d.id === diag.dayOfWeek)?.name || `Día ${diag.dayOfWeek}`;
   const hourLabel = formatHourSlot(diag.hourSlot);
+  const slotKey = `${diag.dayOfWeek}_${diag.hourSlot}`;
+  const isPromoted = !!promoted && promoted.status === 'OPEN';
+  const volunteers = promoted?.volunteers || [];
+  const myVolunteer = session.memberId ? volunteers.find(v => v.memberId === session.memberId) : null;
 
   let badgeColor = 'bg-amber-500/20 text-amber-300 border-amber-500/40';
   let reasonTitle = '';
@@ -74,34 +99,147 @@ function NearMissSlotCard({ diag }: { diag: SlotDiagnostic }) {
   }
 
   return (
-    <div className="p-4 rounded-2xl bg-slate-900/70 border border-white/10 hover:border-white/20 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
-      <div className="flex items-start gap-3">
-        <div className="p-2 rounded-xl bg-slate-800/90 text-cyan-300 border border-white/5 mt-0.5">
-          <Clock className="w-4 h-4" />
-        </div>
-        <div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-bold text-white">
-              {dayName} {hourLabel}
-            </span>
-            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${badgeColor}`}>
-              {reasonTitle}
-            </span>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-white/5 font-medium">
-              {diag.availableCount} / 8 disponibles
-            </span>
+    <div
+      className={`p-4 sm:p-5 rounded-2xl transition-all shadow-md space-y-3 border ${
+        isPromoted
+          ? 'bg-gradient-to-r from-amber-950/40 via-slate-900/90 to-slate-950/80 border-amber-400/50 shadow-[0_0_25px_rgba(245,158,11,0.15)]'
+          : 'bg-slate-900/70 border-white/10 hover:border-white/20'
+      }`}
+    >
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div
+            className={`p-2 rounded-xl mt-0.5 border ${
+              isPromoted
+                ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
+                : 'bg-slate-800/90 text-cyan-300 border border-white/5'
+            }`}
+          >
+            {isPromoted ? <Flame className="w-4 h-4 text-amber-400 animate-pulse" /> : <Clock className="w-4 h-4" />}
           </div>
-          <p className="text-xs text-slate-300/90 mt-1">
-            {reasonDescription}
-          </p>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-bold text-white">
+                {dayName} {hourLabel}
+              </span>
+
+              {isPromoted && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/50 flex items-center gap-1 shadow-sm">
+                  <Flame className="w-3 h-3 text-amber-400" />
+                  🔥 Convocatoria Abierta
+                </span>
+              )}
+
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${badgeColor}`}>
+                {reasonTitle}
+              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-white/5 font-medium">
+                {diag.availableCount} / 8 disponibles
+              </span>
+            </div>
+            <p className="text-xs text-slate-300/90 mt-1">{reasonDescription}</p>
+            {promoted?.notes && (
+              <div className="mt-2 text-xs text-amber-200/90 italic bg-amber-950/40 p-2 rounded-lg border border-amber-500/20">
+                &ldquo;{promoted.notes}&rdquo;
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Acciones y Puestos faltantes */}
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end shrink-0">
+          {diag.missingSlots.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap mr-1">
+              <span className="text-[11px] text-slate-400 font-medium">Falta:</span>
+              {diag.missingSlots.map(s => (
+                <span
+                  key={s}
+                  className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-950/60 text-rose-300 border border-rose-500/30"
+                >
+                  {s}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Botón ¡Puedo ayudar! para Miembros */}
+          {session.memberId && onVolunteerClick && (
+            <button
+              type="button"
+              onClick={() =>
+                onVolunteerClick({
+                  type: 'INCOMPLETE_SLOT',
+                  slotKey,
+                  dayOfWeek: diag.dayOfWeek,
+                  dayName,
+                  hourLabel,
+                  missingSlots: diag.missingSlots,
+                  notes: promoted?.notes,
+                })
+              }
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm active:scale-95 ${
+                myVolunteer
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                  : 'bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 text-slate-950'
+              }`}
+            >
+              <HandHeart className="w-3.5 h-3.5" />
+              <span>{myVolunteer ? '✓ Ayuda ofrecida (Editar)' : '¡Puedo ayudar!'}</span>
+            </button>
+          )}
+
+          {/* Botones de Administrador para Promover o Cerrar Convocatoria */}
+          {session.type === 'ADMIN' && (
+            <>
+              {isPromoted ? (
+                onClosePromotion && (
+                  <button
+                    type="button"
+                    onClick={() => onClosePromotion(slotKey)}
+                    className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-white/10 text-xs font-medium transition-all flex items-center gap-1"
+                  >
+                    <MegaphoneOff className="w-3 h-3" />
+                    <span>Cerrar</span>
+                  </button>
+                )
+              ) : (
+                onPromote && (
+                  <button
+                    type="button"
+                    onClick={() => onPromote(diag)}
+                    className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-400/40 text-xs font-bold transition-all flex items-center gap-1 shadow-sm"
+                  >
+                    <Megaphone className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Promover</span>
+                  </button>
+                )
+              )}
+            </>
+          )}
         </div>
       </div>
-      {diag.missingSlots.length > 0 && (
-        <div className="flex items-center gap-1.5 flex-wrap shrink-0">
-          <span className="text-[11px] text-slate-400 font-medium">Falta:</span>
-          {diag.missingSlots.map(s => (
-            <span key={s} className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-950/60 text-rose-300 border border-rose-500/30">
-              {s}
+
+      {/* Lista de Voluntarios Apuntados */}
+      {volunteers.length > 0 && (
+        <div className="pt-2.5 border-t border-white/10 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-amber-300 flex items-center gap-1">
+            <HandHeart className="w-3.5 h-3.5 text-amber-400" />
+            Voluntarios para completar ({volunteers.length}):
+          </span>
+          {volunteers.map(v => (
+            <span
+              key={v.id}
+              title={v.availabilityNote ? `Nota: ${v.availabilityNote}` : undefined}
+              className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-xl bg-slate-950 border border-white/10 text-xs text-slate-200"
+            >
+              <span className="font-bold text-cyan-300 text-[11px]">{v.assignedRole}</span>
+              <span>{v.characterName}</span>
+              <JobBadge jobId={v.assignedJob} size="sm" />
+              {v.availabilityNote && (
+                <span className="text-[10px] text-slate-400 italic max-w-[120px] truncate">
+                  · {v.availabilityNote}
+                </span>
+              )}
             </span>
           ))}
         </div>
@@ -115,6 +253,7 @@ interface PartyFinderViewProps {
   nearMissSlots?: SlotDiagnostic[];
   scheduledParties: ScheduledParty[];
   pastParties?: ScheduledParty[];
+  promotedRecruitments?: PromotedRecruitment[];
   session: UserSession;
   onAcceptParty: (data: {
     scheduledDate: string;
@@ -134,6 +273,15 @@ interface PartyFinderViewProps {
   }) => Promise<void>;
   onCancelParty: (id: string) => Promise<void>;
   onConfirmAttendance?: (partyId: string, memberId: string, status: ConfirmationStatus) => Promise<void>;
+  onVolunteerClick?: (target: VolunteerModalTarget) => void;
+  onPromoteSlot?: (
+    slotKey: string,
+    dayOfWeek: number,
+    hourSlot: number,
+    missingSlots: SlotRole[],
+    notes?: string
+  ) => Promise<void>;
+  onClosePromotion?: (slotKey: string) => Promise<void>;
 }
 
 export default function PartyFinderView({
@@ -141,10 +289,14 @@ export default function PartyFinderView({
   nearMissSlots = [],
   scheduledParties,
   pastParties = [],
+  promotedRecruitments = [],
   session,
   onAcceptParty,
   onCancelParty,
   onConfirmAttendance,
+  onVolunteerClick,
+  onPromoteSlot,
+  onClosePromotion,
 }: PartyFinderViewProps) {
   const [selectedDay, setSelectedDay] = useState<number | 'ALL'>('ALL');
   const [expandedSlots, setExpandedSlots] = useState<Record<string, boolean>>({});
@@ -156,6 +308,34 @@ export default function PartyFinderView({
   const [showPastParties, setShowPastParties] = useState(false);
   const [copyStatusMap, setCopyStatusMap] = useState<Record<string, boolean>>({});
   const [clipboardFallbackText, setClipboardFallbackText] = useState<string | null>(null);
+
+  // Modal para que el admin promueva una franja incompleta
+  const [promotingDiag, setPromotingDiag] = useState<SlotDiagnostic | null>(null);
+  const [promoteNotes, setPromoteNotes] = useState('');
+  const [isPromotingSubmitting, setIsPromotingSubmitting] = useState(false);
+
+  const handleStartPromote = (diag: SlotDiagnostic) => {
+    setPromotingDiag(diag);
+    setPromoteNotes('');
+  };
+
+  const handleConfirmPromote = async () => {
+    if (!promotingDiag || !onPromoteSlot) return;
+    setIsPromotingSubmitting(true);
+    try {
+      const slotKey = `${promotingDiag.dayOfWeek}_${promotingDiag.hourSlot}`;
+      await onPromoteSlot(
+        slotKey,
+        promotingDiag.dayOfWeek,
+        promotingDiag.hourSlot,
+        promotingDiag.missingSlots,
+        promoteNotes.trim() || undefined
+      );
+      setPromotingDiag(null);
+    } finally {
+      setIsPromotingSubmitting(false);
+    }
+  };
 
   const handleCopyDiscord = async (party: ScheduledParty) => {
     const text = formatPartyForDiscord(party);
@@ -419,6 +599,23 @@ export default function PartyFinderView({
                         <span className="hidden sm:inline text-[11px] text-slate-300">.ics</span>
                       </a>
 
+                      {/* Botón ¡Puedo ayudar! para miembros que no están en la party */}
+                      {session.memberId && !sp.members.some(m => m.memberId === session.memberId) && onVolunteerClick && (
+                        <button
+                          type="button"
+                          onClick={() => onVolunteerClick({ type: 'SCHEDULED_PARTY', party: sp })}
+                          className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500/20 to-teal-500/20 hover:from-cyan-500/30 hover:to-teal-500/30 text-cyan-300 border border-cyan-400/40 text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm active:scale-95"
+                          title="Ofrecerme como suplente en caso de que alguien falte"
+                        >
+                          <HandHeart className="w-3.5 h-3.5" />
+                          <span>
+                            {sp.volunteers?.some(v => v.memberId === session.memberId)
+                              ? '✓ Ayuda ofrecida (Editar)'
+                              : '¡Puedo ayudar!'}
+                          </span>
+                        </button>
+                      )}
+
                       {session.type === 'ADMIN' && (
                         <button
                           onClick={() => onCancelParty(sp.id)}
@@ -530,6 +727,34 @@ export default function PartyFinderView({
                       );
                     })}
                   </div>
+
+                  {/* Lista de Suplentes Listos para esta Party */}
+                  {sp.volunteers && sp.volunteers.length > 0 && (
+                    <div className="mt-3.5 p-3 rounded-2xl bg-slate-900/60 border border-white/10 flex flex-wrap items-center justify-between gap-2.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
+                          <HandHeart className="w-3.5 h-3.5 text-cyan-400" />
+                          Suplentes listos ({sp.volunteers.length}):
+                        </span>
+                        {sp.volunteers.map(v => (
+                          <span
+                            key={v.id}
+                            title={v.availabilityNote ? `Nota: ${v.availabilityNote}` : undefined}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-950 border border-white/10 text-xs text-slate-200"
+                          >
+                            <span className="font-bold text-indigo-300 text-[11px]">{v.assignedRole}</span>
+                            <span>{v.characterName}</span>
+                            <JobBadge jobId={v.assignedJob} size="sm" />
+                            {v.availabilityNote && (
+                              <span className="text-[10px] text-slate-400 italic max-w-[140px] truncate">
+                                · {v.availabilityNote}
+                              </span>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -653,9 +878,21 @@ export default function PartyFinderView({
                   Horarios con 6 o más miembros disponibles donde pequeños ajustes en disponibilidad o flex jobs podrían desbloquear una incursión:
                 </p>
                 <div className="space-y-2.5">
-                  {filteredNearMissSlots.map(diag => (
-                    <NearMissSlotCard key={`${diag.dayOfWeek}_${diag.hourSlot}`} diag={diag} />
-                  ))}
+                  {filteredNearMissSlots.map(diag => {
+                    const slotKey = `${diag.dayOfWeek}_${diag.hourSlot}`;
+                    const promoted = promotedRecruitments.find(r => r.slotKey === slotKey && r.status === 'OPEN');
+                    return (
+                      <NearMissSlotCard
+                        key={slotKey}
+                        diag={diag}
+                        promoted={promoted}
+                        session={session}
+                        onVolunteerClick={onVolunteerClick}
+                        onPromote={handleStartPromote}
+                        onClosePromotion={onClosePromotion}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -714,7 +951,7 @@ export default function PartyFinderView({
                           onClick={() => toggleExpand(slotKey)}
                           className="flex items-center gap-1 px-3 py-2 rounded-xl bg-slate-900/60 border border-white/10 text-xs text-slate-300 hover:text-white transition-all"
                         >
-                          <span>{isExpanded ? 'Ocultar alternativas' : `Ver todas (${combinations.length})`}</span>
+                          <span>{isExpanded ? 'Ocultar explorador' : `Ver todas (${combinations.length})`}</span>
                           {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                         </button>
                       )}
@@ -773,55 +1010,18 @@ export default function PartyFinderView({
                     </div>
                   </div>
 
-                  {/* Lista de Alternativas (si se expande) */}
+                  {/* Vista de Todas las Parties con Paginación y Filtros */}
                   {isExpanded && combinations.length > 1 && (
-                    <div className="mt-4 space-y-3 pt-3 border-t border-white/10">
-                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                        Otras Combinaciones Viables en este Horario ({combinations.length - 1})
-                      </div>
-                      {combinations.slice(1).map((comb, altIdx) => (
-                        <div
-                          key={altIdx}
-                          className="p-3.5 rounded-2xl bg-slate-900/50 border border-white/5 hover:border-white/10 transition-all"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2 mb-2 text-xs">
-                            <div className="flex items-center gap-2">
-                              <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
-                                Alternativa #{altIdx + 2}
-                              </span>
-                              <span className="text-slate-400">
-                                Promedio UWU: <strong className="text-cyan-300">{comb.avgProgressScore}</strong>
-                              </span>
-                              <span className="text-slate-400">
-                                Main Jobs: <strong className="text-emerald-400">{comb.mainJobsCount}/8</strong>
-                              </span>
-                            </div>
-
-                            {session.type === 'ADMIN' && (
-                              <button
-                                onClick={() => handleOpenScheduleModal(comb)}
-                                className="px-3 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-400/30 text-[11px] font-semibold transition-all"
-                              >
-                                Oficializar esta opción
-                              </button>
-                            )}
-                          </div>
-
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                            {Object.values(comb.slots).map((slot, sIdx) => (
-                              <div key={sIdx} className="p-2 rounded-lg bg-slate-950/40 border border-white/5">
-                                <div className="flex items-center justify-between text-[10px] text-slate-400 mb-0.5">
-                                  <span className="font-bold text-indigo-300">{slot.slotRole}</span>
-                                  <span className="truncate max-w-[80px] text-slate-200">
-                                    {slot.member.characterName}
-                                  </span>
-                                </div>
-                                <JobBadge jobId={slot.job} size="sm" isMain={slot.isMainJob} />
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
+                    <div className="mt-5 pt-4 border-t border-white/10 animate-in fade-in duration-200">
+                      <SlotPartiesBrowser
+                        combinations={combinations}
+                        slotKey={slotKey}
+                        dayName={dayName}
+                        hourLabel={hourLabel}
+                        session={session}
+                        onSchedule={handleOpenScheduleModal}
+                        onCopySuccess={text => setClipboardFallbackText(text)}
+                      />
                     </div>
                   )}
                 </div>
@@ -844,9 +1044,21 @@ export default function PartyFinderView({
                   Franjas con alta afluencia que podrían convertirse en raid con pequeños ajustes de disponibilidad o roles:
                 </p>
                 <div className="space-y-2.5">
-                  {filteredNearMissSlots.map(diag => (
-                    <NearMissSlotCard key={`${diag.dayOfWeek}_${diag.hourSlot}`} diag={diag} />
-                  ))}
+                  {filteredNearMissSlots.map(diag => {
+                    const slotKey = `${diag.dayOfWeek}_${diag.hourSlot}`;
+                    const promoted = promotedRecruitments.find(r => r.slotKey === slotKey && r.status === 'OPEN');
+                    return (
+                      <NearMissSlotCard
+                        key={slotKey}
+                        diag={diag}
+                        promoted={promoted}
+                        session={session}
+                        onVolunteerClick={onVolunteerClick}
+                        onPromote={handleStartPromote}
+                        onClosePromotion={onClosePromotion}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -962,6 +1174,83 @@ export default function PartyFinderView({
                 className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white text-xs font-bold shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
               >
                 {isSubmitting ? 'Guardando...' : 'Confirmar y Agendar Incursión'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para que el Admin promueva una franja incompleta como convocatoria */}
+      {promotingDiag && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-md glass-card rounded-3xl p-6 border border-amber-500/40 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-400/30">
+                  <Megaphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-base font-bold text-white">Promover Convocatoria</h4>
+                  <p className="text-xs text-slate-400">
+                    {DAYS_OF_WEEK.find(d => d.id === promotingDiag.dayOfWeek)?.name} a las{' '}
+                    {formatHourSlot(promotingDiag.hourSlot)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPromotingDiag(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-900 border border-white/10 text-xs space-y-1.5">
+              <div className="text-slate-300 font-medium">
+                Puestos necesarios para completar 8/8:
+              </div>
+              <div className="flex items-center gap-1 flex-wrap">
+                {promotingDiag.missingSlots.map(s => (
+                  <span
+                    key={s}
+                    className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-950/60 text-rose-300 border border-rose-500/30"
+                  >
+                    {s}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-slate-300 text-xs font-semibold mb-1">
+                Mensaje o Enfoque para la FC (Opcional):
+              </label>
+              <textarea
+                rows={3}
+                value={promoteNotes}
+                onChange={e => setPromoteNotes(e.target.value)}
+                placeholder="Ej: ¡Buscamos 1 Pure Healer y 1 Caster para completar este horario! ¡Apúntense con '¡Puedo ayudar!'!"
+                className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white placeholder:text-slate-500 text-xs focus:outline-none focus:border-amber-400"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => setPromotingDiag(null)}
+                className="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-white"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isPromotingSubmitting}
+                onClick={handleConfirmPromote}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs shadow-[0_0_15px_rgba(245,158,11,0.3)] transition-all flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Megaphone className="w-4 h-4" />
+                <span>{isPromotingSubmitting ? 'Promoviendo...' : 'Abrir Convocatoria'}</span>
               </button>
             </div>
           </div>

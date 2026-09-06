@@ -14,7 +14,8 @@ import {
   ShieldAlert,
   Users,
   Copy,
-  Download
+  Download,
+  HandHeart,
 } from 'lucide-react';
 import { 
   formatDateToSpanish, 
@@ -27,12 +28,14 @@ interface UpcomingPartyBannerProps {
   party: ScheduledParty;
   currentMemberId?: string;
   onConfirmAttendance?: (partyId: string, memberId: string, status: ConfirmationStatus) => Promise<void>;
+  onVolunteerClick?: (party: ScheduledParty) => void;
 }
 
 export default function UpcomingPartyBanner({ 
   party, 
   currentMemberId, 
-  onConfirmAttendance 
+  onConfirmAttendance,
+  onVolunteerClick,
 }: UpcomingPartyBannerProps) {
   const [submittingStatus, setSubmittingStatus] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'fallback'>('idle');
@@ -270,6 +273,54 @@ export default function UpcomingPartyBanner({
           </div>
         )}
 
+        {/* Callout para miembros no convocados que puedan ofrecerse como suplente */}
+        {!isCurrentMemberIncluded && currentMemberId && onVolunteerClick && (
+          <div className="my-4 p-4 rounded-2xl bg-cyan-950/40 border border-cyan-500/30 flex flex-wrap items-center justify-between gap-3 shadow-md">
+            {(() => {
+              const myVolunteer = party.volunteers?.find(v => v.memberId === currentMemberId);
+              return (
+                <>
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-400/30 shrink-0">
+                      <HandHeart className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white flex items-center gap-2">
+                        <span>
+                          {myVolunteer
+                            ? '¡Te has ofrecido como suplente para esta incursión!'
+                            : '¿No estás en la party pero puedes ayudar si falta alguien?'}
+                        </span>
+                        {myVolunteer && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                            ✓ Ayuda registrada
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-300 mt-0.5">
+                        {myVolunteer
+                          ? `Ofreciste cubrir: ${myVolunteer.assignedRole} (${myVolunteer.assignedJob})${
+                              myVolunteer.availabilityNote ? ` · "${myVolunteer.availabilityNote}"` : ''
+                            }`
+                          : 'Deja saber al líder y a la FC qué rol puedes jugar para entrar de suplente en caso necesario.'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onVolunteerClick(party)}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 text-slate-950 text-xs font-bold shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all hover:scale-105 active:scale-95 flex items-center gap-1.5"
+                  >
+                    <HandHeart className="w-4 h-4" />
+                    <span>{myVolunteer ? 'Modificar mi ayuda' : '¡Puedo ayudar!'}</span>
+                  </button>
+                </>
+              );
+            })()}
+          </div>
+        )}
+
         {/* Notas de la Incursión */}
         {party.notes && (
           <p className="text-sm text-slate-300/90 my-4 italic bg-slate-950/40 p-3 rounded-xl border border-white/5">
@@ -375,6 +426,34 @@ export default function UpcomingPartyBanner({
               );
             })}
           </div>
+
+          {/* Sección de Suplentes Listos para esta Party */}
+          {party.volunteers && party.volunteers.length > 0 && (
+            <div className="mt-4 p-3.5 rounded-2xl bg-slate-900/60 border border-white/10 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
+                  <HandHeart className="w-4 h-4 text-cyan-400" />
+                  Suplentes listos ({party.volunteers.length}):
+                </span>
+                {party.volunteers.map(v => (
+                  <span
+                    key={v.id}
+                    title={v.availabilityNote ? `Nota: ${v.availabilityNote}` : undefined}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-950 border border-white/10 text-xs text-slate-200"
+                  >
+                    <span className="font-bold text-indigo-300 text-[11px]">{v.assignedRole}</span>
+                    <span>{v.characterName}</span>
+                    <JobBadge jobId={v.assignedJob} size="sm" />
+                    {v.availabilityNote && (
+                      <span className="text-[10px] text-slate-400 italic max-w-[120px] truncate">
+                        · {v.availabilityNote}
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Modal de fallback para copiar manualmente si el portapapeles del navegador no tiene permisos */}

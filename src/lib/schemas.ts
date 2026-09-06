@@ -243,3 +243,36 @@ export const confirmAttendanceSchema = z.object({
   memberId: z.string().min(1).optional(),
   status: z.enum(['CONFIRMED', 'DECLINED', 'PENDING']),
 });
+
+export const volunteerPartySchema = z
+  .object({
+    partyScheduleId: z.string().trim().min(1).optional(),
+    slotKey: z.string().trim().min(1).optional(),
+    assignedJob: jobIdSchema,
+    assignedRole: z.string().trim().min(1).max(50),
+    availabilityNote: z.string().trim().max(500).optional(),
+  })
+  .refine(data => !!data.partyScheduleId || !!data.slotKey, {
+    message: 'Debes indicar el ID de la party o la clave de la franja horaria.',
+  });
+
+export const removeVolunteerSchema = z
+  .object({
+    partyScheduleId: z.string().trim().min(1).optional(),
+    slotKey: z.string().trim().min(1).optional(),
+  })
+  .refine(data => !!data.partyScheduleId || !!data.slotKey, {
+    message: 'Debes indicar el ID de la party o la clave de la franja horaria.',
+  });
+
+export const promoteSlotSchema = z.object({
+  slotKey: z.string().trim().min(1).max(50),
+  dayOfWeek: z.coerce.number().int().min(0).max(6),
+  hourSlot: z.coerce.number().int().min(0).max(23),
+  notes: z.string().trim().max(1000).optional(),
+  missingSlots: z.array(slotRoleSchema).default([]),
+});
+
+export const closePromoteSlotSchema = z.object({
+  slotKey: z.string().trim().min(1).max(50),
+});
