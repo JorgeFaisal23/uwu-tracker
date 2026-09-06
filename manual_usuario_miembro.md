@@ -61,6 +61,26 @@ Mueve las barras deslizantes del 0% al 100% de acuerdo con la mecánica más lej
 
 Al terminar, haz clic en **"Guardar Perfil y Progreso"**.
 
+### C. ¿Un solo progreso o uno por rol?
+
+Arriba de las barras tienes dos botones:
+
+- **"Mismo progreso para todos"** (opción por defecto): tus porcentajes valen igual para
+  tu main job y para todos tus flex. Si no te interesa afinar más, no tienes que tocar
+  nada: así funciona desde siempre.
+- **"Progreso por rol"**: cada rol lleva sus propios porcentajes (Tank, Pure Healer,
+  Shield Healer, Melee, Phys Ranged y Caster). Es para cuando conoces la pelea desde un
+  rol mucho mejor que desde otro: puede que te sepas Titan de memoria como tanque y
+  apenas la hayas jugado de caster.
+
+Con el progreso por rol activado aparecen las pastillas de cada rol que puedes cubrir
+según tu main job y tus flex. Elige una para editar ese rol, o **General** para editar la
+base. Los roles que no toques heredan el progreso general, y siempre puedes devolver uno
+a la base con **"Volver a usar mi progreso general en este rol"**.
+
+Esto no es decorativo: cuando el buscador te coloca en un puesto de flex, usa el progreso
+de ESE rol para decidir. Un flex que apenas has tocado ya no cuenta como si fuera tu main.
+
 ---
 
 ## 3. Marcar tu Disponibilidad Semanal

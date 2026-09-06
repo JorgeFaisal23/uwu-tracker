@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { InviteToken, Member, UserSession } from '@/types';
 import { ShieldCheck, Lock, User, KeyRound, Trash2, X, Check, Ticket, Copy, Ban } from 'lucide-react';
 
@@ -30,6 +30,15 @@ export default function AdminModal({
   const [resettingMemberId, setResettingMemberId] = useState<string | null>(null);
   const [newMemberPassword, setNewMemberPassword] = useState('');
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   // Invitaciones
   const [tab, setTab] = useState<'members' | 'invites'>('members');
@@ -180,27 +189,38 @@ export default function AdminModal({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
-      <div className="w-full max-w-xl rounded-3xl glass-modal p-6 sm:p-8 border border-amber-500/30 shadow-2xl relative animate-in fade-in zoom-in-95 duration-200">
-        <button
-          onClick={onClose}
-          className="absolute top-5 right-5 p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-white/10 transition-all"
-        >
-          <X className="w-5 h-5" />
-        </button>
+  if (!isOpen) return null;
 
-        <div className="flex items-center gap-3 mb-6">
-          <div className="p-2.5 rounded-2xl bg-amber-500/20 text-amber-300 border border-amber-400/30 shadow-[0_0_15px_rgba(245,158,11,0.2)]">
-            <ShieldCheck className="w-6 h-6" />
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto"
+      onClick={e => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="w-full max-w-xl max-h-[92vh] sm:max-h-[88vh] flex flex-col rounded-3xl glass-modal border border-amber-500/30 shadow-2xl relative animate-in fade-in zoom-in-95 duration-200 overflow-hidden my-auto">
+        <div className="flex items-center justify-between p-5 sm:p-6 pb-4 border-b border-white/5 flex-shrink-0 bg-slate-950/40">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-2xl bg-amber-500/20 text-amber-300 border border-amber-400/30 shadow-[0_0_15px_rgba(245,158,11,0.2)]">
+              <ShieldCheck className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-white tracking-wide">
+                {session.type === 'ADMIN' ? 'Panel de Control de Administrador' : 'Acceso de Administrador'}
+              </h3>
+              <p className="text-xs text-amber-300/80">Gestión de miembros y raid de Lux Obscura</p>
+            </div>
           </div>
-          <div>
-            <h3 className="text-xl font-bold text-white tracking-wide">
-              {session.type === 'ADMIN' ? 'Panel de Control de Administrador' : 'Acceso de Administrador'}
-            </h3>
-            <p className="text-xs text-amber-300/80">Gestión de miembros y raid de Lux Obscura</p>
-          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-white/10 transition-all ml-2 shrink-0"
+            title="Cerrar (Esc)"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
+
+        <div className="p-5 sm:p-6 flex-1 overflow-y-auto min-h-0 space-y-4">
 
         {error && (
           <div className="p-3 mb-4 rounded-xl bg-red-950/40 border border-red-500/40 text-red-300 text-xs">
@@ -414,21 +434,35 @@ export default function AdminModal({
               {members.map(m => (
                 <div
                   key={m.id}
-                  className="p-3 rounded-2xl bg-slate-900/60 border border-white/5 flex items-center justify-between gap-3"
+                  className="p-3 rounded-2xl bg-slate-900/60 border border-white/5 flex items-center justify-between gap-3 overflow-hidden"
                 >
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <div className="font-bold text-white flex items-center gap-2">
-                      <span>{m.characterName}</span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono">
+                      <span className="truncate">{m.characterName}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono shrink-0">
                         {m.mainJob} {m.tankStance ? `(${m.tankStance})` : ''}
                       </span>
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">
-                      Flex: {m.flexJobs && m.flexJobs.length > 0 ? m.flexJobs.join(', ') : 'Ninguno'}
+                    <div className="text-[10px] text-slate-400 mt-0.5 break-words">
+                      Flex:{' '}
+                      {m.flexJobs && m.flexJobs.length > 0 ? (
+                        m.flexJobs.length > 4 ? (
+                          <span title={m.flexJobs.join(', ')}>
+                            {m.flexJobs.slice(0, 3).join(', ')}{' '}
+                            <span className="px-1 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono font-bold">
+                              +{m.flexJobs.length - 3}
+                            </span>
+                          </span>
+                        ) : (
+                          m.flexJobs.join(', ')
+                        )
+                      ) : (
+                        'Ninguno'
+                      )}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 shrink-0">
                     <button
                       onClick={() => setResettingMemberId(resettingMemberId === m.id ? null : m.id)}
                       className="p-1.5 rounded-lg text-slate-400 hover:text-amber-300 hover:bg-amber-950/30 transition-all"
@@ -471,6 +505,7 @@ export default function AdminModal({
             )}
           </div>
         )}
+        </div>
       </div>
     </div>
   );

@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { WeeklyFcSnapshot, UserSession, Member, UwuProgress } from '@/types';
+import { WeeklyFcSnapshot, UserSession, Member, MemberProgress } from '@/types';
+import { memberDisplayProgress } from '@/lib/progress';
 import {
   TrendingUp,
   Award,
@@ -22,7 +23,7 @@ interface HistoricalViewProps {
   snapshots: WeeklyFcSnapshot[];
   session: UserSession;
   members?: Member[];
-  progressMap?: Record<string, UwuProgress>;
+  progressMap?: Record<string, MemberProgress>;
   onTakeSnapshot: (params?: { year?: number; weekNumber?: number }) => Promise<void>;
   onDeleteSnapshot?: (year: number, weekNumber: number) => Promise<void>;
 }
@@ -64,7 +65,7 @@ export default function HistoricalView({
     const activeMembers = members;
     let totalScore = 0;
     for (const m of activeMembers) {
-      totalScore += progressMap[m.id]?.overallScore ?? 0;
+      totalScore += memberDisplayProgress(m, progressMap[m.id]).overallScore;
     }
     const avgScore = activeMembers.length > 0 ? Math.round(totalScore / activeMembers.length) : 0;
     return {

@@ -759,6 +759,14 @@ export default function PartyFinderView({
                           </div>
                           <div className="flex items-center justify-between mt-1">
                             <JobBadge jobId={slot.job} size="sm" isMain={slot.isMainJob} />
+                            {/* El progreso con el que entra a ESTE puesto: quien lleva
+                                progreso por rol puede valer distinto en cada uno. */}
+                            <span
+                              className="text-[10px] font-mono text-slate-400"
+                              title={`Progreso en el rol de este puesto: ${slot.progressScore} / 500`}
+                            >
+                              {slot.progressScore}
+                            </span>
                           </div>
                         </div>
                       ))}

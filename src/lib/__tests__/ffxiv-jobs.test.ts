@@ -7,6 +7,7 @@ import {
   clampPhasePct,
   canPlayTankStance,
   getCurrentPhaseName,
+  normalizePhaseProgress,
 } from '../ffxiv-jobs';
 import type { JobId } from '@/types';
 
@@ -129,10 +130,14 @@ describe('adjustPhaseProgressOnEdit', () => {
     expect(result).toEqual([100, 100, 100, 100, 100]);
   });
 
-  it('mantiene intacto el progreso de fases posteriores', () => {
+  it('vacía automáticamente las fases posteriores al modificar una fase anterior', () => {
     const initial: [number, number, number, number, number] = [100, 50, 40, 10, 0];
     const result = adjustPhaseProgressOnEdit(initial, 2, 80);
-    expect(result).toEqual([100, 80, 40, 10, 0]);
+    expect(result).toEqual([100, 80, 0, 0, 0]);
+
+    // Modificar la fase 1 vacía las fases 2 a 5
+    const fromPhase1 = adjustPhaseProgressOnEdit([100, 80, 0, 0, 0], 1, 45);
+    expect(fromPhase1).toEqual([45, 0, 0, 0, 0]);
   });
 
   it('acota valores fuera de rango (menores a 0 o mayores a 100)', () => {
@@ -147,4 +152,34 @@ describe('adjustPhaseProgressOnEdit', () => {
     expect(adjustPhaseProgressOnEdit(initial, 6, 99)).toEqual(initial);
   });
 });
+
+describe('normalizePhaseProgress', () => {
+  it('corrige automáticamente cuando existen porcentajes incompletos en dos fases', () => {
+    // Si la fase 2 está al 60% y la fase 3 al 40%, preserva hasta la fase con menor progreso (fase 2)
+    const input: [number, number, number, number, number] = [100, 60, 40, 0, 0];
+    expect(normalizePhaseProgress(input)).toEqual([100, 60, 0, 0, 0]);
+  });
+
+  it('corrige si la fase 1 está incompleta y una fase posterior tiene progreso', () => {
+    const input: [number, number, number, number, number] = [45, 60, 0, 0, 0];
+    expect(normalizePhaseProgress(input)).toEqual([45, 0, 0, 0, 0]);
+  });
+
+  it('corrige cuando existen tres o más fases incompletas', () => {
+    const input: [number, number, number, number, number] = [100, 50, 40, 10, 0];
+    expect(normalizePhaseProgress(input)).toEqual([100, 50, 0, 0, 0]);
+  });
+
+  it('corrige si una fase previa está al 0% y una posterior tiene progreso', () => {
+    const input: [number, number, number, number, number] = [100, 0, 50, 0, 0];
+    expect(normalizePhaseProgress(input)).toEqual([100, 0, 0, 0, 0]);
+  });
+
+  it('mantiene intactos progresos válidos con una sola fase activa', () => {
+    expect(normalizePhaseProgress([100, 100, 35, 0, 0])).toEqual([100, 100, 35, 0, 0]);
+    expect(normalizePhaseProgress([100, 100, 100, 100, 100])).toEqual([100, 100, 100, 100, 100]);
+    expect(normalizePhaseProgress([0, 0, 0, 0, 0])).toEqual([0, 0, 0, 0, 0]);
+  });
+});
+
 

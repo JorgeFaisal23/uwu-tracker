@@ -5,15 +5,24 @@ import {
   JobId,
   Member,
   MemberAvailability,
+  MemberProgress,
   ProgressHistoryEntry,
+  ProgressMode,
   ScheduledParty,
   ScheduledPartyMember,
+  SubRole,
   TankStance,
   UwuProgress,
   WeeklyFcSnapshot,
   InviteToken,
 } from '@/types';
-import { calculateOverallScore, clampPhasePct, getCurrentPhaseName } from './ffxiv-jobs';
+import { calculateOverallScore, clampPhasePct, normalizePhaseProgress } from './ffxiv-jobs';
+import {
+  buildProgress,
+  emptyMemberProgress,
+  emptyProgress,
+  memberDisplayProgress,
+} from './progress';
 import {
   getCalendarWeek,
   getCalendarWeekRange,
@@ -43,6 +52,19 @@ interface MemberRow {
 
 interface ProgressRow {
   member_id: string;
+  p1_garuda_pct: number;
+  p2_ifrit_pct: number;
+  p3_titan_pct: number;
+  p4_ultima_pct: number;
+  p5_roulette_pct: number;
+  overall_score: number;
+  progress_mode: string | null;
+  updated_at: string;
+}
+
+interface RoleProgressRow {
+  member_id: string;
+  subrole: string;
   p1_garuda_pct: number;
   p2_ifrit_pct: number;
   p3_titan_pct: number;
@@ -125,38 +147,78 @@ function toMember(row: MemberRow): Member {
   };
 }
 
-function toProgress(row: ProgressRow): UwuProgress {
-  return {
-    memberId: row.member_id,
-    p1GarudaPct: row.p1_garuda_pct,
-    p2IfritPct: row.p2_ifrit_pct,
-    p3TitanPct: row.p3_titan_pct,
-    p4UltimaPct: row.p4_ultima_pct,
-    p5RoulettePct: row.p5_roulette_pct,
-    overallScore: row.overall_score,
-    // Se calcula al leer: como columna podía quedar desincronizada de los porcentajes.
-    currentPhaseName: getCurrentPhaseName(
+/**
+ * `overallScore` y `currentPhaseName` se derivan al leer, nunca se guardan a mano: como
+ * columnas podían quedar desincronizadas de los porcentajes de su propia fila.
+ */
+function toProgress(row: ProgressRow | RoleProgressRow, subrole: SubRole | null): UwuProgress {
+  return buildProgress(
+    row.member_id,
+    subrole,
+    [
       row.p1_garuda_pct,
       row.p2_ifrit_pct,
       row.p3_titan_pct,
       row.p4_ultima_pct,
-      row.p5_roulette_pct
-    ),
-    updatedAt: row.updated_at,
-  };
+      row.p5_roulette_pct,
+    ],
+    row.updated_at
+  );
 }
 
-function emptyProgress(memberId: string): UwuProgress {
+/**
+ * Distingue "la tabla de progreso por rol todavía no existe" de un fallo real.
+ *
+ * El código se despliega antes de que nadie ejecute `scripts/role-progress.sql`. Sin
+ * esto, ese intervalo tumbaría el roster y el buscador de parties enteros; con esto,
+ * la aplicación sigue funcionando con el progreso general, que es justo lo que había
+ * antes de esta función.
+ */
+function missingRoleProgressTable(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+
+  // Solo estos dos códigos: 42P01 es "relación inexistente" en PostgreSQL y PGRST205
+  // es "PostgREST no encuentra la tabla". Cualquier otro fallo (permisos, conexión) es
+  // un problema real y debe propagarse en vez de disfrazarse de tabla ausente.
+  const missing = error.code === '42P01' || error.code === 'PGRST205';
+
+  if (missing) {
+    console.warn(
+      '[storage] Falta la tabla member_role_progress; se usa solo el progreso general. ' +
+        'Ejecuta scripts/role-progress.sql en Supabase.'
+    );
+  }
+
+  return missing;
+}
+
+function toProgressMode(value: string | null | undefined): ProgressMode {
+  return value === 'PER_ROLE' ? 'PER_ROLE' : 'UNIFIED';
+}
+
+/**
+ * Junta la fila de progreso general con los ajustes por rol de un mismo miembro.
+ *
+ * Un miembro puede no tener ninguna de las dos cosas (alta recién hecha, o progreso por
+ * rol guardado antes de que existiera su fila general): en ambos casos sale un progreso
+ * en cero en modo unificado, que es el comportamiento de siempre.
+ */
+function toMemberProgress(
+  memberId: string,
+  generalRow: ProgressRow | undefined,
+  roleRows: RoleProgressRow[]
+): MemberProgress {
+  const byRole: Partial<Record<SubRole, UwuProgress>> = {};
+
+  for (const row of roleRows) {
+    byRole[row.subrole as SubRole] = toProgress(row, row.subrole as SubRole);
+  }
+
   return {
     memberId,
-    p1GarudaPct: 0,
-    p2IfritPct: 0,
-    p3TitanPct: 0,
-    p4UltimaPct: 0,
-    p5RoulettePct: 0,
-    overallScore: 0,
-    currentPhaseName: getCurrentPhaseName(0, 0, 0, 0, 0),
-    updatedAt: new Date().toISOString(),
+    mode: toProgressMode(generalRow?.progress_mode),
+    general: generalRow ? toProgress(generalRow, null) : emptyProgress(memberId),
+    byRole,
   };
 }
 
@@ -432,61 +494,142 @@ export class StorageService {
 
   // --- Progreso UWU ---
 
-  static async getProgressMap(): Promise<Record<string, UwuProgress>> {
-    const rows = unwrap<ProgressRow[]>(
-      await getSupabase().from('member_progress').select('*'),
-      'getProgressMap'
-    );
+  static async getProgressMap(): Promise<Record<string, MemberProgress>> {
+    const supabase = getSupabase();
 
-    return Object.fromEntries(rows.map(row => [row.member_id, toProgress(row)]));
+    // Las dos consultas se lanzan a la vez: esta es la lectura que hacen tanto el
+    // roster como el buscador de parties.
+    const [general, roles] = await Promise.all([
+      supabase.from('member_progress').select('*'),
+      supabase.from('member_role_progress').select('*'),
+    ]);
+
+    const generalRows = unwrap<ProgressRow[]>(general, 'getProgressMap');
+    const roleRows = missingRoleProgressTable(roles.error)
+      ? []
+      : unwrap<RoleProgressRow[]>(roles, 'getProgressMap (por rol)');
+
+    const rolesByMember = new Map<string, RoleProgressRow[]>();
+    for (const row of roleRows) {
+      const list = rolesByMember.get(row.member_id) ?? [];
+      list.push(row);
+      rolesByMember.set(row.member_id, list);
+    }
+
+    const generalByMember = new Map(generalRows.map(row => [row.member_id, row]));
+
+    // La unión de ambas tablas, no solo la general: un miembro con ajustes por rol debe
+    // aparecer en el mapa aunque le falte la fila de progreso general.
+    const memberIds = new Set([...generalByMember.keys(), ...rolesByMember.keys()]);
+
+    return Object.fromEntries(
+      Array.from(memberIds, id => [
+        id,
+        toMemberProgress(id, generalByMember.get(id), rolesByMember.get(id) ?? []),
+      ])
+    );
   }
 
-  static async getProgressByMemberId(memberId: string): Promise<UwuProgress> {
-    const { data, error } = await getSupabase()
-      .from('member_progress')
-      .select('*')
-      .eq('member_id', memberId)
-      .maybeSingle();
+  static async getProgressByMemberId(memberId: string): Promise<MemberProgress> {
+    const supabase = getSupabase();
 
-    if (error) {
-      console.error('[storage] getProgressByMemberId:', error);
+    const [general, roles] = await Promise.all([
+      supabase.from('member_progress').select('*').eq('member_id', memberId).maybeSingle(),
+      supabase.from('member_role_progress').select('*').eq('member_id', memberId),
+    ]);
+
+    const roleError = missingRoleProgressTable(roles.error) ? null : roles.error;
+
+    if (general.error || roleError) {
+      console.error('[storage] getProgressByMemberId:', general.error ?? roleError);
       throw new Error('Error de base de datos en getProgressByMemberId');
     }
 
-    return data ? toProgress(data as ProgressRow) : emptyProgress(memberId);
+    if (!general.data && (roles.data ?? []).length === 0) return emptyMemberProgress(memberId);
+
+    return toMemberProgress(
+      memberId,
+      (general.data as ProgressRow | null) ?? undefined,
+      (roles.data ?? []) as RoleProgressRow[]
+    );
   }
 
+  /**
+   * Guarda el progreso de un miembro en las 5 fases.
+   *
+   * Con `subrole` escribe solo el de ese rol; sin él, el progreso general, que es el que
+   * heredan todos los roles sin ajuste propio.
+   */
   static async updateProgress(
     memberId: string,
-    p1: number,
-    p2: number,
-    p3: number,
-    p4: number,
-    p5: number
-  ): Promise<UwuProgress> {
-    // clampPhasePct filtra NaN e Infinity además de acotar el rango; los CHECK de la
-    // tabla son la segunda barrera.
+    pcts: [number, number, number, number, number],
+    subrole: SubRole | null = null
+  ): Promise<MemberProgress> {
+    const normalized = normalizePhaseProgress(pcts);
     const values = {
-      p1_garuda_pct: clampPhasePct(p1),
-      p2_ifrit_pct: clampPhasePct(p2),
-      p3_titan_pct: clampPhasePct(p3),
-      p4_ultima_pct: clampPhasePct(p4),
-      p5_roulette_pct: clampPhasePct(p5),
+      p1_garuda_pct: normalized[0],
+      p2_ifrit_pct: normalized[1],
+      p3_titan_pct: normalized[2],
+      p4_ultima_pct: normalized[3],
+      p5_roulette_pct: normalized[4],
       updated_at: new Date().toISOString(),
     };
 
-    const { data, error } = await getSupabase()
-      .from('member_progress')
-      .upsert({ member_id: memberId, ...values }, { onConflict: 'member_id' })
-      .select('*')
-      .single();
+    const { error } = subrole
+      ? await getSupabase()
+          .from('member_role_progress')
+          .upsert({ member_id: memberId, subrole, ...values }, { onConflict: 'member_id,subrole' })
+      : await getSupabase()
+          .from('member_progress')
+          .upsert({ member_id: memberId, ...values }, { onConflict: 'member_id' });
 
     if (error) {
       console.error('[storage] updateProgress:', error);
       throw new Error('Error de base de datos en updateProgress');
     }
 
-    return toProgress(data as ProgressRow);
+    return this.getProgressByMemberId(memberId);
+  }
+
+  /** Cambia entre un progreso único para todos los roles y uno por rol. */
+  static async setProgressMode(
+    memberId: string,
+    mode: ProgressMode
+  ): Promise<MemberProgress> {
+    // Solo se toca `progress_mode`: el upsert crea la fila en cero si aún no existe y,
+    // si existe, deja intactos los porcentajes.
+    const { error } = await getSupabase()
+      .from('member_progress')
+      .upsert(
+        { member_id: memberId, progress_mode: mode, updated_at: new Date().toISOString() },
+        { onConflict: 'member_id' }
+      );
+
+    if (error) {
+      console.error('[storage] setProgressMode:', error);
+      throw new Error('Error de base de datos en setProgressMode');
+    }
+
+    return this.getProgressByMemberId(memberId);
+  }
+
+  /** Descarta el ajuste de un rol: vuelve a heredar el progreso general. */
+  static async clearRoleProgress(
+    memberId: string,
+    subrole: SubRole
+  ): Promise<MemberProgress> {
+    const { error } = await getSupabase()
+      .from('member_role_progress')
+      .delete()
+      .eq('member_id', memberId)
+      .eq('subrole', subrole);
+
+    if (error) {
+      console.error('[storage] clearRoleProgress:', error);
+      throw new Error('Error de base de datos en clearRoleProgress');
+    }
+
+    return this.getProgressByMemberId(memberId);
   }
 
   // --- Disponibilidad ---
@@ -779,7 +922,9 @@ export class StorageService {
     const recordedAt = new Date().toISOString();
 
     const rows = members.map(m => {
-      const p = progressMap[m.id] ?? emptyProgress(m.id);
+      // Con progreso por rol, la foto semanal guarda el del main job: es el rol con el
+      // que se cuenta al miembro en el roster y en el promedio de la FC.
+      const p = memberDisplayProgress(m, progressMap[m.id]);
       return {
         member_id: m.id,
         character_name: m.characterName,

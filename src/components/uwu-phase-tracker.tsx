@@ -7,6 +7,8 @@ interface UwuPhaseTrackerProps {
   compact?: boolean;
   onEditClick?: () => void;
   canEdit?: boolean;
+  /** Rol al que corresponde este progreso; solo se pinta si hay progreso por rol. */
+  roleLabel?: string;
 }
 
 export default function UwuPhaseTracker({
@@ -14,6 +16,7 @@ export default function UwuPhaseTracker({
   compact = false,
   onEditClick,
   canEdit = false,
+  roleLabel,
 }: UwuPhaseTrackerProps) {
   const pcts = [
     progress.p1GarudaPct,
@@ -73,6 +76,11 @@ export default function UwuPhaseTracker({
           <h4 className="text-lg font-bold text-white tracking-wide mt-0.5">
             {progress.currentPhaseName}
           </h4>
+          {roleLabel && (
+            <div className="text-[11px] text-indigo-300 mt-0.5">
+              Progreso como <strong className="text-indigo-200">{roleLabel}</strong>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-3">

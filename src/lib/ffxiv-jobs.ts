@@ -267,26 +267,61 @@ export function canPlayTankStance(stance: TankStance | null | undefined, require
 }
 
 /**
- * Al modificar el progreso de una fase de UWU (1-5), llena automáticamente al 100%
- * todas las fases anteriores en la secuencia del combate.
+ * Normaliza los porcentajes de las 5 fases de UWU.
+ *
+ * La progresión en UWU es estrictamente secuencial:
+ * - Si una fase anterior no está completa (< 100%), ninguna fase posterior puede tener progreso.
+ * - Si existen porcentajes incompletos en dos o más fases, se conserva únicamente el progreso
+ *   hasta la fase incompleta con menor progreso (la primera incompleta en la secuencia del combate)
+ *   y todas las fases posteriores se vacían a 0%.
+ */
+export function normalizePhaseProgress(
+  pcts: [number, number, number, number, number]
+): [number, number, number, number, number] {
+  const result: [number, number, number, number, number] = [
+    clampPhasePct(pcts[0]),
+    clampPhasePct(pcts[1]),
+    clampPhasePct(pcts[2]),
+    clampPhasePct(pcts[3]),
+    clampPhasePct(pcts[4]),
+  ];
+
+  // En cuanto una fase esté incompleta (< 100%), todas las posteriores quedan en 0%
+  for (let i = 0; i < 5; i++) {
+    if (result[i] < 100) {
+      for (let j = i + 1; j < 5; j++) {
+        result[j] = 0;
+      }
+      break;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Al modificar el progreso de una fase de UWU (1-5):
+ * - Las fases anteriores se llenan automáticamente al 100%.
+ * - La fase seleccionada toma el nuevo valor acotado (0-100%).
+ * - Las fases posteriores se vacían automáticamente a 0%.
  */
 export function adjustPhaseProgressOnEdit(
   currentPcts: [number, number, number, number, number],
   phaseId: number,
   newValue: number
 ): [number, number, number, number, number] {
-  const result: [number, number, number, number, number] = [
-    clampPhasePct(currentPcts[0]),
-    clampPhasePct(currentPcts[1]),
-    clampPhasePct(currentPcts[2]),
-    clampPhasePct(currentPcts[3]),
-    clampPhasePct(currentPcts[4]),
-  ];
-
   const targetIndex = phaseId - 1;
   if (targetIndex < 0 || targetIndex >= 5) {
-    return result;
+    return [
+      clampPhasePct(currentPcts[0]),
+      clampPhasePct(currentPcts[1]),
+      clampPhasePct(currentPcts[2]),
+      clampPhasePct(currentPcts[3]),
+      clampPhasePct(currentPcts[4]),
+    ];
   }
+
+  const result: [number, number, number, number, number] = [0, 0, 0, 0, 0];
 
   // Las fases anteriores se llenan al 100%
   for (let i = 0; i < targetIndex; i++) {
@@ -296,6 +331,12 @@ export function adjustPhaseProgressOnEdit(
   // La fase modificada toma el nuevo valor
   result[targetIndex] = clampPhasePct(newValue);
 
+  // Las fases posteriores se vacían al 0%
+  for (let i = targetIndex + 1; i < 5; i++) {
+    result[i] = 0;
+  }
+
   return result;
 }
+
 

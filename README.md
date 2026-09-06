@@ -108,7 +108,9 @@ con la hora local del proceso, una incursión de las 21:00 aparecería a las 03:
 1. Crea un proyecto en [supabase.com](https://supabase.com).
 2. Abre el **SQL Editor** y ejecuta el contenido de `schema.sql`. Crea las tablas, los
    índices, la función `replace_member_availability` y activa Row Level Security.
-3. En **Project Settings > API** copia el `Project URL` y la `service_role secret key`.
+3. Si la base ya existía de antes, ejecuta además los scripts de `scripts/` que aún no
+   hayas pasado (`invite-tokens.sql`, `role-progress.sql`). Todos son idempotentes.
+4. En **Project Settings > API** copia el `Project URL` y la `service_role secret key`.
 
 > La `anon key` no se usa: la aplicación entra siempre desde el servidor con la
 > service-role key. Las tablas tienen RLS activo y ninguna política pública, así que

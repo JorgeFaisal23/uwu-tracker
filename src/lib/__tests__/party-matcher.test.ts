@@ -6,7 +6,15 @@ import {
   diagnoseAllNearMissSlots,
 } from '../party-matcher';
 import { FFXIV_JOBS } from '../ffxiv-jobs';
-import type { JobId, Member, MemberAvailability, TankStance, UwuProgress } from '@/types';
+import { emptyMemberProgress, buildProgress } from '../progress';
+import type {
+  JobId,
+  Member,
+  MemberAvailability,
+  MemberProgress,
+  SubRole,
+  TankStance,
+} from '@/types';
 
 const DAY = 5;
 const HOUR = 21;
@@ -29,20 +37,52 @@ function member(
   };
 }
 
-function progressFor(entries: Record<string, number>): Record<string, UwuProgress> {
+const AT = '2026-01-01T00:00:00.000Z';
+
+/** Reparte un score de 0 a 500 entre las 5 fases, que es de donde sale `overallScore`. */
+function phases(score: number): [number, number, number, number, number] {
+  const pcts: [number, number, number, number, number] = [0, 0, 0, 0, 0];
+  let left = Math.max(0, Math.min(500, score));
+
+  for (let i = 0; i < 5; i++) {
+    pcts[i] = Math.min(100, left);
+    left -= pcts[i];
+  }
+
+  return pcts;
+}
+
+function progressFor(entries: Record<string, number>): Record<string, MemberProgress> {
   return Object.fromEntries(
     Object.entries(entries).map(([id, score]) => [
       id,
       {
+        ...emptyMemberProgress(id),
+        general: buildProgress(id, null, phases(score), AT),
+      },
+    ])
+  );
+}
+
+/**
+ * Progreso por rol: `general` es el respaldo y `byRole` los ajustes de cada subrol.
+ */
+function roleProgressFor(
+  entries: Record<string, { general: number; byRole?: Partial<Record<SubRole, number>> }>
+): Record<string, MemberProgress> {
+  return Object.fromEntries(
+    Object.entries(entries).map(([id, { general, byRole = {} }]) => [
+      id,
+      {
         memberId: id,
-        p1GarudaPct: 0,
-        p2IfritPct: 0,
-        p3TitanPct: 0,
-        p4UltimaPct: 0,
-        p5RoulettePct: 0,
-        overallScore: score,
-        currentPhaseName: '',
-        updatedAt: '2026-01-01T00:00:00.000Z',
+        mode: 'PER_ROLE' as const,
+        general: buildProgress(id, null, phases(general), AT),
+        byRole: Object.fromEntries(
+          Object.entries(byRole).map(([sr, score]) => [
+            sr,
+            buildProgress(id, sr as SubRole, phases(score as number), AT),
+          ])
+        ) as Partial<Record<SubRole, ReturnType<typeof buildProgress>>>,
       },
     ])
   );
@@ -264,6 +304,86 @@ describe('findPartyCombinationsForSlot', () => {
         expect(FFXIV_JOBS[slot.job].subrole).toBe(slot.subrole);
       }
     }
+  });
+});
+
+describe('progreso por rol', () => {
+  /**
+   * Un MCH que también juega SMN: veterano con el phys ranged, casi novato con el
+   * caster. Es justo el caso que el progreso general no sabía distinguir.
+   */
+  function rosterConFlexDesigual() {
+    return [...baseRoster(), member('flex_caster', 'MCH', { flexJobs: ['SMN'] })];
+  }
+
+  it('valora al miembro por el progreso del rol que ocuparía, no por el general', () => {
+    const roster = rosterConFlexDesigual();
+
+    const progress = roleProgressFor({
+      ...Object.fromEntries(roster.map(m => [m.id, { general: 0 }])),
+      c: { general: 400, byRole: { CASTER: 400 } },
+      flex_caster: { general: 450, byRole: { CASTER: 10, PHYS_RANGED: 450 } },
+    });
+
+    const combos = findPartyCombinationsForSlot(
+      DAY,
+      HOUR,
+      availabilityFor(roster),
+      roster,
+      progress
+    );
+
+    // Aunque su progreso general (450) es el más alto del roster, de caster va a 10:
+    // el puesto de caster es suyo, y el BLM titular (400 de caster) se queda fuera.
+    expect(combos[0].slots.c.member.id).toBe('flex_caster');
+    expect(combos[0].slots.c.progressScore).toBe(10);
+    expect(combos[0].totalProgressScore).toBe(10);
+  });
+
+  it('sin progreso por rol el mismo roster prefiere al caster titular', () => {
+    const roster = rosterConFlexDesigual();
+
+    // Mismos números, pero en modo unificado: solo cuenta el progreso general.
+    const progress = progressFor({
+      ...Object.fromEntries(roster.map(m => [m.id, 0])),
+      c: 400,
+      flex_caster: 450,
+    });
+
+    const combos = findPartyCombinationsForSlot(
+      DAY,
+      HOUR,
+      availabilityFor(roster),
+      roster,
+      progress
+    );
+
+    expect(combos[0].slots.c.member.id).toBe('c');
+    expect(combos[0].slots.c.progressScore).toBe(400);
+  });
+
+  it('los roles sin ajuste propio siguen valiendo el progreso general', () => {
+    const roster = rosterConFlexDesigual();
+
+    const progress = roleProgressFor({
+      ...Object.fromEntries(roster.map(m => [m.id, { general: 0 }])),
+      // Solo ha afinado su progreso de caster; de phys ranged hereda el general.
+      flex_caster: { general: 300, byRole: { CASTER: 0 } },
+    });
+
+    const combos = findPartyCombinationsForSlot(
+      DAY,
+      HOUR,
+      availabilityFor(roster),
+      roster,
+      progress
+    );
+
+    const conFlexDeCaster = combos.find(c => c.slots.c.member.id === 'flex_caster');
+    const conFlexDePr = combos.find(c => c.slots.pr.member.id === 'flex_caster');
+
+    expect(conFlexDeCaster?.slots.c.progressScore).toBe(0);
+    expect(conFlexDePr?.slots.pr.progressScore).toBe(300);
   });
 });
 

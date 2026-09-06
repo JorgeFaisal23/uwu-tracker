@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { 
   Member, 
-  UwuProgress, 
+  MemberProgress, 
   MemberAvailability, 
   PartyCombination, 
   ScheduledParty, 
@@ -14,22 +14,34 @@ import {
   SlotDiagnostic
 } from '@/types';
 import { getPartyStartDateTime, isPartyExpired } from '@/lib/date-utils';
+import { SUBROLE_LABELS, emptyMemberProgress, memberDisplayProgress } from '@/lib/progress';
+import {
+  APP_VERSION,
+  changelogUserKey,
+  markVersionSeen,
+  readSeenVersion,
+  subscribeSeenVersion,
+} from '@/lib/changelog';
+import { FFXIV_JOBS } from '@/lib/ffxiv-jobs';
 import AstralCanvas from '@/components/astral-canvas';
 import Navbar from '@/components/navbar';
 import UpcomingPartyBanner from '@/components/upcoming-party-banner';
 import UwuPhaseTracker from '@/components/uwu-phase-tracker';
 import JobBadge from '@/components/job-badge';
+import RoleProgressChips from '@/components/role-progress-chips';
+import FlexJobsBadgeList from '@/components/flex-jobs-badge-list';
 import PartyFinderView from '@/components/party-finder-view';
 import AvailabilityGrid from '@/components/availability-grid';
 import HistoricalView from '@/components/historical-view';
 import MemberAuthModal from '@/components/modals/member-auth-modal';
+import ChangelogModal from '@/components/modals/changelog-modal';
 import MemberProfileModal from '@/components/modals/member-profile-modal';
 import AdminModal from '@/components/modals/admin-modal';
 import { Users, Search, ArrowUpDown } from 'lucide-react';
 
 interface AppData {
   members: Member[];
-  progressMap: Record<string, UwuProgress>;
+  progressMap: Record<string, MemberProgress>;
   availabilities: MemberAvailability[];
   viableSlotsMap: Record<string, PartyCombination[]>;
   nearMissSlots: SlotDiagnostic[];
@@ -73,7 +85,7 @@ async function fetchAppData(): Promise<AppData> {
     const [membersData, partiesData, availData, historyData] = await Promise.all([
       readJson(membersRes, {} as {
         members?: Member[];
-        progressMap?: Record<string, UwuProgress>;
+        progressMap?: Record<string, MemberProgress>;
         attendanceCounts?: Record<string, number>;
       }),
       readJson(partiesRes, {} as {
@@ -130,7 +142,7 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
 
   // Datos globales
   const [members, setMembers] = useState<Member[]>([]);
-  const [progressMap, setProgressMap] = useState<Record<string, UwuProgress>>({});
+  const [progressMap, setProgressMap] = useState<Record<string, MemberProgress>>({});
   const [availabilities, setAvailabilities] = useState<MemberAvailability[]>([]);
   const [viableSlotsMap, setViableSlotsMap] = useState<Record<string, PartyCombination[]>>({});
   const [nearMissSlots, setNearMissSlots] = useState<SlotDiagnostic[]>([]);
@@ -148,6 +160,8 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
   const [isMemberAuthModalOpen, setIsMemberAuthModalOpen] = useState(false);
   const [isMemberProfileModalOpen, setIsMemberProfileModalOpen] = useState(false);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  // Solo la apertura manual es estado: la automática se deduce de lo ya visto.
+  const [isChangelogRequested, setIsChangelogRequested] = useState(false);
 
   // Carga de datos. `fetchAppData` y `fetchSession` viven fuera del componente y no
   // tocan el estado: así el efecto de arranque solo escribe estado después de esperar
@@ -191,6 +205,36 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
       cancelled = true;
     };
   }, [applyData]);
+
+  /**
+   * Las novedades de la versión salen solas una única vez por persona: se comparan con
+   * la última versión que esa persona dio por leída y, al cerrar la ventana, queda
+   * anotada. El botón del panel de personaje permite releerlas cuando se quiera.
+   *
+   * El servidor responde siempre "ya vista": lo leído vive en el navegador y pintarla
+   * durante el render del servidor solo provocaría un parpadeo al hidratar.
+   */
+  const currentUserKey = changelogUserKey(session);
+
+  const seenChangelogVersion = useSyncExternalStore(
+    subscribeSeenVersion,
+    () => (currentUserKey ? readSeenVersion(currentUserKey) : APP_VERSION),
+    () => APP_VERSION
+  );
+
+  const hasUnseenChangelog = Boolean(currentUserKey) && seenChangelogVersion !== APP_VERSION;
+  const isChangelogModalOpen = isChangelogRequested || hasUnseenChangelog;
+
+  const handleOpenChangelog = useCallback(() => {
+    setIsChangelogRequested(true);
+  }, []);
+
+  const handleCloseChangelog = useCallback(() => {
+    if (currentUserKey && hasUnseenChangelog) {
+      markVersionSeen(currentUserKey, APP_VERSION);
+    }
+    setIsChangelogRequested(false);
+  }, [currentUserKey, hasUnseenChangelog]);
 
   const handleSetSession = (newSession: UserSession) => {
     setSession(newSession);
@@ -322,8 +366,10 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
   });
 
   filteredMembers.sort((a, b) => {
-    const scoreA = progressMap[a.id]?.overallScore || 0;
-    const scoreB = progressMap[b.id]?.overallScore || 0;
+    // Con progreso por rol se ordena por el del main job: es el rol con el que se
+    // cuenta a cada miembro en el roster.
+    const scoreA = memberDisplayProgress(a, progressMap[a.id]).overallScore;
+    const scoreB = memberDisplayProgress(b, progressMap[b.id]).overallScore;
 
     if (sortBy === 'PRIORITY_LOW_FIRST') {
       return scoreA - scoreB; // Menor progreso primero (mayor prioridad)
@@ -338,7 +384,7 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
   const activeMembersCount = members.length;
   let totalFcScore = 0;
   for (const m of members) {
-    totalFcScore += progressMap[m.id]?.overallScore || 0;
+    totalFcScore += memberDisplayProgress(m, progressMap[m.id]).overallScore;
   }
   const avgFcScore = activeMembersCount > 0 ? Math.round(totalFcScore / activeMembersCount) : 0;
 
@@ -365,7 +411,7 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
   // Miembro actualmente conectado
   const currentLoggedInMember = members.find(m => m.id === session.memberId);
   const currentLoggedInProgress = currentLoggedInMember
-    ? progressMap[currentLoggedInMember.id]
+    ? (progressMap[currentLoggedInMember.id] ?? emptyMemberProgress(currentLoggedInMember.id))
     : null;
 
   return (
@@ -459,10 +505,25 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
                   </button>
                 </div>
                 <UwuPhaseTracker
-                  progress={currentLoggedInProgress}
+                  progress={memberDisplayProgress(currentLoggedInMember, currentLoggedInProgress)}
                   canEdit={true}
                   onEditClick={() => setIsMemberProfileModalOpen(true)}
+                  roleLabel={
+                    currentLoggedInProgress.mode === 'PER_ROLE'
+                      ? SUBROLE_LABELS[FFXIV_JOBS[currentLoggedInMember.mainJob].subrole]
+                      : undefined
+                  }
                 />
+
+                {currentLoggedInProgress.mode === 'PER_ROLE' && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] text-slate-400">Progreso por rol:</span>
+                    <RoleProgressChips
+                      member={currentLoggedInMember}
+                      progress={currentLoggedInProgress}
+                    />
+                  </div>
+                )}
               </div>
             )}
 
@@ -539,29 +600,22 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
               {/* Grid de Miembros */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {filteredMembers.map(m => {
-                  const prog = progressMap[m.id] || {
-                    memberId: m.id,
-                    p1GarudaPct: 0,
-                    p2IfritPct: 0,
-                    p3TitanPct: 0,
-                    p4UltimaPct: 0,
-                    p5RoulettePct: 0,
-                    overallScore: 0,
-                    currentPhaseName: 'Fase 1: Garuda (0%)',
-                    updatedAt: new Date().toISOString(),
-                  };
+                  const memberProgress = progressMap[m.id] ?? emptyMemberProgress(m.id);
+                  // La tarjeta enseña el progreso del main job; los demás roles van
+                  // debajo, en sus propias pastillas.
+                  const prog = memberDisplayProgress(m, memberProgress);
 
                   const isMe = m.id === session.memberId;
 
                   return (
                     <div
                       key={m.id}
-                      className={`glass-card rounded-2xl p-5 border transition-all duration-300 hover:border-cyan-400/40 ${
+                      className={`glass-card rounded-2xl p-5 border transition-all duration-300 hover:border-cyan-400/40 overflow-hidden ${
                         isMe ? 'border-cyan-400/50 bg-cyan-950/20 shadow-[0_0_25px_rgba(56,189,248,0.15)]' : 'border-white/10'
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-3 mb-3">
-                        <div>
+                      <div className="flex items-start justify-between gap-3 mb-3 min-w-0">
+                        <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-bold text-white text-base">
                               {m.characterName}
@@ -578,25 +632,15 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
                               {attendanceCounts[m.id] ?? 0} incursión{(attendanceCounts[m.id] ?? 0) === 1 ? '' : 'es'}
                             </span>
                           </div>
-                          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                          <div className="flex items-center gap-2 mt-1.5 flex-wrap min-w-0">
                             <JobBadge jobId={m.mainJob} size="sm" isMain={true} />
                             {m.tankStance && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 font-bold">
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 font-bold shrink-0">
                                 {m.tankStance === 'BOTH' ? 'MT / OT' : m.tankStance}
                               </span>
                             )}
                             {m.flexJobs && m.flexJobs.length > 0 && (
-                              <div className="flex items-center gap-1 text-[11px] text-slate-400">
-                                <span>Flex:</span>
-                                {m.flexJobs.map(fj => (
-                                  <span
-                                    key={fj}
-                                    className="font-bold text-slate-300 px-1 py-0.2 rounded bg-slate-900"
-                                  >
-                                    {fj}
-                                  </span>
-                                ))}
-                              </div>
+                              <FlexJobsBadgeList jobs={m.flexJobs} />
                             )}
                           </div>
                         </div>
@@ -604,7 +648,7 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
                         {isMe && (
                           <button
                             onClick={() => setIsMemberProfileModalOpen(true)}
-                            className="px-2.5 py-1 text-[11px] rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-400/30 hover:bg-cyan-500/30 transition-all"
+                            className="px-2.5 py-1 text-[11px] rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-400/30 hover:bg-cyan-500/30 transition-all shrink-0"
                           >
                             Editar
                           </button>
@@ -613,6 +657,14 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
 
                       {/* Progreso Compacto en las 5 fases */}
                       <UwuPhaseTracker progress={prog} compact={true} />
+
+                      {/* Progreso por rol: solo de quien lo tenga desglosado */}
+                      {memberProgress.mode === 'PER_ROLE' && (
+                        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                          <span className="text-[10px] text-slate-500">Por rol:</span>
+                          <RoleProgressChips member={m} progress={memberProgress} />
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -689,6 +741,7 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
           member={currentLoggedInMember}
           progress={currentLoggedInProgress}
           onUpdateSuccess={loadAllData}
+          onOpenChangelog={handleOpenChangelog}
         />
       )}
 
@@ -702,6 +755,13 @@ export default function TrackerApp({ initialSession }: { initialSession: UserSes
           loadAllData();
         }}
         onRefreshData={loadAllData}
+      />
+
+      <ChangelogModal
+        isOpen={isChangelogModalOpen}
+        onClose={handleCloseChangelog}
+        characterName={session.characterName}
+        isAutoOpened={hasUnseenChangelog && !isChangelogRequested}
       />
     </div>
   );

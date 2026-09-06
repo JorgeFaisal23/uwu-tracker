@@ -66,6 +66,8 @@ Al expandir un bloque horario con quórum verás una o más combinaciones posibl
 
 1. **Party Recomendada (Prioridad de Menor Progreso)**:  
    Aparecerá con un distintivo destacado. Es la formación calculada con el promedio de avance más bajo en UWU. Su propósito es impulsar a los compañeros que van en fases iniciales (Garuda, Ifrit o Titán) para que practiquen y no se queden estancados.
+   
+   Cada puesto muestra a la derecha el progreso con el que esa persona entra **a ese puesto**. Quien tenga activado el progreso por rol puede valer distinto en cada uno: un veterano como tanque que apenas ha jugado de caster entra al puesto de caster con su progreso de caster, no con el de tanque. Es lo que evita que un flex poco rodado pase por un main.
 2. **Prioridad por Clases Principales (Main Jobs)**:  
    Las combinaciones que cuentan con más jugadores en su rol principal aparecen favorecidas frente a aquellas que requieren que varios jueguen clases secundarias (*flex*).
 3. **Compañeros Listos para Rotar**:  
@@ -112,7 +114,7 @@ Para llevar la memoria de la Free Company y ver cómo avanza la curva de aprendi
 
 ### ¿Cuándo conviene tomar la foto histórica?
 - **Momento recomendado**: Cada martes tras el reinicio semanal de servidores de *Final Fantasy XIV* (Weekly Reset), o al término de las sesiones del fin de semana.
-- **Qué guarda**: Congela un resumen del progreso de todos los miembros en esa semana, calculando el promedio global de la FC y registrando cuántos miembros han alcanzado Garuda, Ifrit, Titán, Ultima Weapon y Enrage.
+- **Qué guarda**: Congela un resumen del progreso de todos los miembros en esa semana, calculando el promedio global de la FC y registrando cuántos miembros han alcanzado Garuda, Ifrit, Titán, Ultima Weapon y Enrage. De quien lleve progreso por rol se guarda el de su main job, que es el rol con el que se le cuenta en el roster y en el promedio.
 - Permite que toda la hermandad compare las semanas anteriores y celebre el avance colectivo.
 
 ---

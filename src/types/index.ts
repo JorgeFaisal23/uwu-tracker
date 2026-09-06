@@ -44,8 +44,19 @@ export interface Member {
   updatedAt: string;
 }
 
+/**
+ * Cómo reparte un miembro su progreso entre los roles que juega.
+ *
+ * 'UNIFIED' (por defecto) es el comportamiento de siempre: un solo progreso que vale
+ * para el main job y para todos los flex. 'PER_ROLE' permite afinar por subrol, porque
+ * saber la pelea desde el tanque no es lo mismo que saberla desde el caster.
+ */
+export type ProgressMode = 'UNIFIED' | 'PER_ROLE';
+
 export interface UwuProgress {
   memberId: string;
+  /** null = progreso general: el que se usa para cualquier rol que no tenga el suyo. */
+  subrole: SubRole | null;
   p1GarudaPct: number;    // 0 - 100%
   p2IfritPct: number;     // 0 - 100%
   p3TitanPct: number;     // 0 - 100%
@@ -54,6 +65,19 @@ export interface UwuProgress {
   overallScore: number;   // 0 - 500 (sum of all 5 phases)
   currentPhaseName: string;
   updatedAt: string;
+}
+
+/**
+ * Todo el progreso de un miembro: el general y los ajustes por rol.
+ *
+ * `byRole` solo contiene los roles que el miembro ha editado aparte; cualquier otro
+ * hereda `general`, de modo que el progreso general nunca deja de ser la base viva.
+ */
+export interface MemberProgress {
+  memberId: string;
+  mode: ProgressMode;
+  general: UwuProgress;
+  byRole: Partial<Record<SubRole, UwuProgress>>;
 }
 
 export interface ProgressHistoryEntry {
@@ -104,6 +128,8 @@ export interface AssignedPartySlot {
   isMainJob: boolean;
   subrole: SubRole;
   slotRole: SlotRole;
+  /** Progreso del miembro en ESE subrol; es el que suma al total de la party. */
+  progressScore: number;
 }
 
 export interface SlotDiagnostic {

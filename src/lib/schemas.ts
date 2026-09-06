@@ -1,10 +1,15 @@
 import { z } from 'zod';
 import { FFXIV_JOBS } from './ffxiv-jobs';
-import type { JobId } from '@/types';
+import { PROGRESS_SUBROLES } from './progress';
+import type { JobId, SubRole } from '@/types';
 
 const JOB_IDS = Object.keys(FFXIV_JOBS) as [JobId, ...JobId[]];
 
 export const jobIdSchema = z.enum(JOB_IDS);
+
+export const subroleSchema = z.enum(PROGRESS_SUBROLES as [SubRole, ...SubRole[]]);
+
+export const progressModeSchema = z.enum(['UNIFIED', 'PER_ROLE']);
 
 export const tankStanceSchema = z.enum(['MT', 'OT', 'BOTH']).nullable();
 
@@ -146,11 +151,22 @@ export const progressUpdateSchema = z.object({
    * progreso ajeno enviando otro id.
    */
   memberId: z.string().min(1).optional(),
+  /**
+   * Rol al que pertenece este progreso. Ausente o null = progreso general, el que
+   * heredan todos los roles que no tengan uno propio.
+   */
+  subrole: subroleSchema.nullable().optional(),
   p1GarudaPct: phasePctSchema,
   p2IfritPct: phasePctSchema,
   p3TitanPct: phasePctSchema,
   p4UltimaPct: phasePctSchema,
   p5RoulettePct: phasePctSchema,
+});
+
+/** Alterna entre un progreso único para todos los roles y uno por rol. */
+export const progressModeUpdateSchema = z.object({
+  memberId: z.string().min(1).optional(),
+  mode: progressModeSchema,
 });
 
 // --- Disponibilidad --------------------------------------------------------

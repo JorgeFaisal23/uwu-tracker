@@ -40,7 +40,33 @@ CREATE TABLE IF NOT EXISTS member_progress (
     overall_score INT GENERATED ALWAYS AS (
         p1_garuda_pct + p2_ifrit_pct + p3_titan_pct + p4_ultima_pct + p5_roulette_pct
     ) STORED,
+    -- Un solo progreso para todos los roles ('UNIFIED') o uno por subrol ('PER_ROLE').
+    progress_mode VARCHAR(10) NOT NULL DEFAULT 'UNIFIED'
+        CHECK (progress_mode IN ('UNIFIED', 'PER_ROLE')),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 2b. Progreso específico por subrol
+--
+-- Saber la pelea desde el tanque no es saberla desde el caster, y el buscador reparte
+-- puestos flex. Solo hay fila para los subroles que el miembro ha ajustado a mano; el
+-- resto hereda `member_progress`, que sigue siendo la base viva.
+CREATE TABLE IF NOT EXISTS member_role_progress (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    member_id UUID NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    subrole VARCHAR(20) NOT NULL CHECK (
+        subrole IN ('TANK', 'PURE_HEALER', 'SHIELD_HEALER', 'MELEE', 'PHYS_RANGED', 'CASTER')
+    ),
+    p1_garuda_pct INT NOT NULL DEFAULT 0 CHECK (p1_garuda_pct BETWEEN 0 AND 100),
+    p2_ifrit_pct INT NOT NULL DEFAULT 0 CHECK (p2_ifrit_pct BETWEEN 0 AND 100),
+    p3_titan_pct INT NOT NULL DEFAULT 0 CHECK (p3_titan_pct BETWEEN 0 AND 100),
+    p4_ultima_pct INT NOT NULL DEFAULT 0 CHECK (p4_ultima_pct BETWEEN 0 AND 100),
+    p5_roulette_pct INT NOT NULL DEFAULT 0 CHECK (p5_roulette_pct BETWEEN 0 AND 100),
+    overall_score INT GENERATED ALWAYS AS (
+        p1_garuda_pct + p2_ifrit_pct + p3_titan_pct + p4_ultima_pct + p5_roulette_pct
+    ) STORED,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (member_id, subrole)
 );
 
 -- 3. Disponibilidad semanal (7 días x 24 horas)
@@ -108,6 +134,8 @@ CREATE TABLE IF NOT EXISTS party_schedule_members (
 );
 
 -- Índices para las consultas frecuentes
+CREATE INDEX IF NOT EXISTS idx_member_role_progress_member
+    ON member_role_progress(member_id);
 CREATE INDEX IF NOT EXISTS idx_member_availability_slot
     ON member_availability(day_of_week, hour_slot);
 CREATE INDEX IF NOT EXISTS idx_member_availability_member
@@ -158,6 +186,7 @@ $$;
 -- =========================================================
 ALTER TABLE members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE member_progress ENABLE ROW LEVEL SECURITY;
+ALTER TABLE member_role_progress ENABLE ROW LEVEL SECURITY;
 ALTER TABLE member_availability ENABLE ROW LEVEL SECURITY;
 ALTER TABLE progress_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE party_schedules ENABLE ROW LEVEL SECURITY;

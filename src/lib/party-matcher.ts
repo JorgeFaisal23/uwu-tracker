@@ -2,14 +2,15 @@ import {
   JobId,
   Member,
   MemberAvailability,
+  MemberProgress,
   PartyCombination,
   SubRole,
-  UwuProgress,
   AssignedPartySlot,
   SlotRole,
   SlotDiagnostic,
 } from '@/types';
 import { FFXIV_JOBS, canPlayTankStance } from './ffxiv-jobs';
+import { roleProgressScore } from './progress';
 
 export interface MemberCandidate {
   member: Member;
@@ -97,7 +98,7 @@ export function findPartyCombinationsForSlot(
   hourSlot: number,
   availabilities: MemberAvailability[],
   members: Member[],
-  progressMap: Record<string, UwuProgress>,
+  progressMap: Record<string, MemberProgress>,
   attendanceMap?: Record<string, number>
 ): PartyCombination[] {
   // 1. Miembros activos disponibles en esta franja.
@@ -172,6 +173,7 @@ export function findPartyCombinationsForSlot(
         isMainJob: cand.isMainJob,
         subrole: spec.subrole,
         slotRole: spec.role,
+        progressScore: cand.progressScore,
       };
       usedMemberIds.add(cand.member.id);
       usedJobs.add(cand.job);
@@ -203,7 +205,7 @@ export function findPartyCombinationsForSlot(
 
 export function buildCandidates(
   availableMembers: Member[],
-  progressMap: Record<string, UwuProgress>
+  progressMap: Record<string, MemberProgress>
 ): Record<SubRole, MemberCandidate[]> {
   const bySubrole: Record<SubRole, MemberCandidate[]> = {
     TANK: [],
@@ -215,8 +217,6 @@ export function buildCandidates(
   };
 
   for (const member of availableMembers) {
-    const progressScore = progressMap[member.id]?.overallScore ?? 0;
-
     const playableJobs: { job: JobId; isMain: boolean }[] = [
       { job: member.mainJob, isMain: true },
       ...(member.flexJobs || []).map(j => ({ job: j, isMain: false })),
@@ -235,13 +235,16 @@ export function buildCandidates(
         job: pj.job,
         subrole: jobInfo.subrole,
         isMainJob: pj.isMain,
-        progressScore,
+        // El progreso que cuenta es el del subrol que se ocuparía, no el general: quien
+        // domina la pelea como tanque pero apenas la ha jugado de caster entra al puesto
+        // de caster con su progreso de caster.
+        progressScore: roleProgressScore(progressMap[member.id], jobInfo.subrole),
       });
     }
   }
 
-  // Explorar primero a quien menos ha progresado hace que las mejores parties
-  // aparezcan pronto, lo que a su vez hace que la poda sea efectiva desde el inicio.
+  // Explorar primero a quien menos ha progresado EN ESE SUBROL hace que las mejores
+  // parties aparezcan pronto, lo que a su vez hace que la poda sea efectiva desde el inicio.
   // A igualdad de progreso se prefiere el main job (Prioridad 2).
   for (const subrole of Object.keys(bySubrole) as SubRole[]) {
     bySubrole[subrole].sort(
@@ -459,7 +462,7 @@ class TopCombinations {
 export function scanAllViableSlots(
   availabilities: MemberAvailability[],
   members: Member[],
-  progressMap: Record<string, UwuProgress>,
+  progressMap: Record<string, MemberProgress>,
   attendanceMap?: Record<string, number>
 ): Record<string, PartyCombination[]> {
   const activeMemberIds = new Set(members.filter(m => m.isActive).map(m => m.id));
@@ -508,7 +511,7 @@ export function diagnoseSlot(
   hourSlot: number,
   availabilities: MemberAvailability[],
   members: Member[],
-  progressMap: Record<string, UwuProgress>
+  progressMap: Record<string, MemberProgress>
 ): SlotDiagnostic | null {
   const availableMemberIds = new Set(
     availabilities
@@ -604,7 +607,7 @@ export function diagnoseSlot(
 export function diagnoseAllNearMissSlots(
   availabilities: MemberAvailability[],
   members: Member[],
-  progressMap: Record<string, UwuProgress>,
+  progressMap: Record<string, MemberProgress>,
   maxResults = 5
 ): SlotDiagnostic[] {
   const activeMemberIds = new Set(members.filter(m => m.isActive).map(m => m.id));
